@@ -5,4 +5,4 @@ xarray >= 0.10.0
 zarr >= 2.3.0
 xarray-simlab
 scipy~=1.5.2
-pytest
+pytest-cov
