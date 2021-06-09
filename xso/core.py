@@ -3,9 +3,9 @@ import numpy as np
 import math
 
 from .model import PhydraModel
-from .solvers import SolverABC, ODEINTSolver, GEKKOSolver, StepwiseSolver
+from .solvers import SolverABC, ODEINTSolver, StepwiseSolver#, GEKKOSolver
 
-_built_in_solvers = {'odeint': ODEINTSolver, 'gekko': GEKKOSolver, 'stepwise': StepwiseSolver}
+_built_in_solvers = {'odeint': ODEINTSolver, 'gekko': 0, 'stepwise': StepwiseSolver}
 
 
 class PhydraCore:

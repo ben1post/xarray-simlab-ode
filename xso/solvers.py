@@ -3,7 +3,7 @@ import numpy as np
 from collections import defaultdict
 
 from scipy.integrate import odeint
-from gekko import GEKKO
+# from gekko import GEKKO
 
 
 def to_ndarray(value):
@@ -329,218 +329,218 @@ class StepwiseSolver(SolverABC):
         pass
 
 
-class GEKKOSolver(SolverABC):
-    """ Solver that can handle solving the model with GEKKO """
-
-    def __init__(self):
-        self.gekko = GEKKO(remote=False)
-
-        self.full_model_values = defaultdict()
-
-        self.reserved_labels = ['abs', 'exp', 'log10', 'log',
-                                'sqrt', 'sinh', 'cosh', 'tanh',
-                                'sin', 'cos', 'tan', 'asin',
-                                'acos', 'atan', 'erf', 'erfc']
-
-    def check_label(self, label):
-        """ check if string label coincides with reserved gekko mathematical function and change accordingly """
-        if label.lower()[:3] in self.reserved_labels:
-            return 'x' + label
-        else:
-            return label
-
-    def add_variable(self, label, initial_value, model):
-        """ """
-        label = self.check_label(label)
-
-        if isinstance(initial_value, list) or isinstance(initial_value, np.ndarray):
-            var_out = [self.gekko.SV(value=initial_value[i], name=label + str(i), lb=0)
-                       for i in range(len(initial_value))]
-        else:
-            var_out = self.gekko.SV(value=initial_value, name=label, lb=0)
-
-        return var_out
-
-    def add_parameter(self, label, value):
-        """ """
-        label = self.check_label(label)
-
-        if isinstance(value, str):
-            return value
-
-        if np.size(value) == 1:
-            par_out = self.gekko.Param(value=float(value), name=label)
-        elif len(np.shape(value)) == 1:
-            par_out = [self.gekko.Param(value=float(value[i]), name=label + str(i)) for i in range(len(value))]
-        elif len(np.shape(value)) == 2:
-            par_shape = np.shape(value)
-            par_out = [[self.gekko.Param(value=value[i, j], name=label + '_'.join((str(i), str(j))))
-                         for j in range(par_shape[1])] for i in range(par_shape[0])]
-        else:
-            raise Exception("Currently phydra does not support 3 dimensional parameters")
-
-        return par_out
-
-    def register_flux(self, label, flux, model, dims):
-        """ this returns storage container """
-        label = self.check_label(label)
-
-        var_in_dict = {**model.variables, **model.flux_values}
-        # need to force vectorization here, otherwise lists/arrays of gekko object are not iterated over:
-
-        _flux = flux(state=var_in_dict,
-                     parameters=model.parameters,
-                     forcings=model.forcings, vectorized=True, dims=dims)
-
-        if np.size(_flux) == 1:
-            flux_out = self.gekko.Intermediate(_flux, name=label)
-        elif len(np.shape(_flux)) == 1:
-            flux_out = [self.gekko.Intermediate(_flux[i], name=label + str(i)) for i in range(len(_flux))]
-        elif len(np.shape(_flux)) == 2:
-            flx_shape = np.shape(_flux)
-            flux_out = [[self.gekko.Intermediate(_flux[i, j], name=label + '_'.join((str(i), str(j))))
-                         for j in range(flx_shape[1])] for i in range(flx_shape[0])]
-        else:
-            raise Exception("Currently phydra does not support 3 dimensional fluxes")
-
-        return flux_out
-
-    def add_forcing(self, label, forcing_func, model):
-        """ """
-        label = self.check_label(label)
-
-        return self.gekko.Param(value=forcing_func(model.time), name=label)
-
-    def assemble(self, model):
-        """ """
-        for key, value in model.variables.items():
-            self.full_model_values[key] = value
-            if isinstance(value, list) or isinstance(value, np.ndarray):
-                model.full_model_dims[key] = np.size(value)
-            else:
-                model.full_model_dims[key] = None
-
-        for key, value in model.flux_values.items():
-            self.full_model_values[key] = value
-            if isinstance(value, list) or isinstance(value, np.ndarray):
-                if np.size(value) == np.size(model.time):
-                    model.full_model_dims[key] = None
-                else:
-                    model.full_model_dims[key] = np.size(value)
-            else:
-                model.full_model_dims[key] = None
-
-        # finally print model repr for diagnostic purposes:
-        print("Model dicts are assembled:")
-        print(model)
-
-        print("Now assembling gekko model:")
-        # Assign fluxes to variables:
-        equations = []
-
-        # Route list input fluxes:
-        list_input_fluxes = defaultdict(list)
-        for flux_var_dict in model.fluxes_per_var["list_input"]:
-            flux_label, negative, list_input = flux_var_dict.values()
-
-            flux_val = model.flux_values[flux_label]
-            flux_dims = model.full_model_dims[flux_label]
-
-            list_var_dims = []
-            for var in list_input:
-                _dim = model.full_model_dims[var]
-                list_var_dims.append(_dim or 1)
-
-            if len(list_input) == flux_dims:
-                for var, flux in zip(list_input, flux_val):
-                    if negative:
-                        list_input_fluxes[var].append(-flux)
-                    else:
-                        list_input_fluxes[var].append(flux)
-            elif sum(list_var_dims) == flux_dims:
-                _dim_counter = 0
-                for var, dims in zip(list_input, list_var_dims):
-                    flux = np.array(flux_val[_dim_counter:_dim_counter + dims])
-                    _dim_counter += dims
-                    if negative:
-                        list_input_fluxes[var].append(-flux)
-                    else:
-                        list_input_fluxes[var].append(flux)
-            else:
-                raise Exception(f"ERROR: list input vars dims {list_var_dims} and "
-                                f"flux output dims {flux_dims} do not match")
-
-        for var_label, value in model.variables.items():
-            flux_applied = False
-            var_fluxes = []
-            dims = model.full_model_dims[var_label]
-            if var_label in model.fluxes_per_var:
-                flux_applied = True
-                for flux_var_dict in model.fluxes_per_var[var_label]:
-                    flux_label, negative, list_input = flux_var_dict.values()
-                    _flux = model.flux_values[flux_label]
-
-                    flux_dims = np.size(_flux)
-
-                    if negative:
-                        if flux_dims > 1 or isinstance(_flux, list) or isinstance(_flux, np.ndarray):
-
-                            var_fluxes.append([-_flux[i] for i in range(flux_dims)])
-                        else:
-                            var_fluxes.append(-_flux)
-                    else:
-                        if flux_dims > 1 or isinstance(_flux, list) or isinstance(_flux, np.ndarray):
-                            var_fluxes.append([_flux[i] for i in range(flux_dims)])
-                        else:
-                            var_fluxes.append(_flux)
-
-            if var_label in list_input_fluxes:
-                flux_applied = True
-                for flux in list_input_fluxes[var_label]:
-                    if dims:
-                        _flux = flux
-                    else:
-                        _flux = np.sum(flux)
-
-                    var_fluxes.append(_flux)
-
-            if not flux_applied:
-                if dims:
-                    var_fluxes.append([0 for i in range(dims)])
-                else:
-                    var_fluxes.append(0)
-
-            if dims:
-                for i in range(dims):
-                    _VAR_FLUXES = []
-                    for var_flx in var_fluxes:
-                        _VAR_FLUXES.append(var_flx[i])
-                    equations.append(value[i].dt() == sum(_VAR_FLUXES))
-            else:
-                _var_fluxes = []
-                for flx in var_fluxes:
-                    if np.size(flx) > 1:
-                        _var_fluxes.append(sum(flx))
-                    else:
-                        _var_fluxes.append(flx)
-
-                equations.append(value.dt() == np.sum(_var_fluxes))
-
-        # create Equations
-        self.gekko.Equations(equations)
-
-        self.gekko.time = model.time
-
-        print("Model equations:")
-        for val in self.gekko.__dict__['_equations']:
-            print(val.value)
-
-    def solve(self, model, time_step):
-        self.gekko.options.REDUCE = 3  # handles reduction of larger models, have not benchmarked it yet
-        self.gekko.options.NODES = 3  # improves solution accuracy
-        self.gekko.options.IMODE = 6  # sequential dynamic Solver
-
-        self.gekko.solve(disp=False)  # use option disp=True to print gekko output
-
-    def cleanup(self):
-        self.gekko.cleanup()
+# class GEKKOSolver(SolverABC):
+#     """ Solver that can handle solving the model with GEKKO """
+#
+#     def __init__(self):
+#         self.gekko = GEKKO(remote=False)
+#
+#         self.full_model_values = defaultdict()
+#
+#         self.reserved_labels = ['abs', 'exp', 'log10', 'log',
+#                                 'sqrt', 'sinh', 'cosh', 'tanh',
+#                                 'sin', 'cos', 'tan', 'asin',
+#                                 'acos', 'atan', 'erf', 'erfc']
+#
+#     def check_label(self, label):
+#         """ check if string label coincides with reserved gekko mathematical function and change accordingly """
+#         if label.lower()[:3] in self.reserved_labels:
+#             return 'x' + label
+#         else:
+#             return label
+#
+#     def add_variable(self, label, initial_value, model):
+#         """ """
+#         label = self.check_label(label)
+#
+#         if isinstance(initial_value, list) or isinstance(initial_value, np.ndarray):
+#             var_out = [self.gekko.SV(value=initial_value[i], name=label + str(i), lb=0)
+#                        for i in range(len(initial_value))]
+#         else:
+#             var_out = self.gekko.SV(value=initial_value, name=label, lb=0)
+#
+#         return var_out
+#
+#     def add_parameter(self, label, value):
+#         """ """
+#         label = self.check_label(label)
+#
+#         if isinstance(value, str):
+#             return value
+#
+#         if np.size(value) == 1:
+#             par_out = self.gekko.Param(value=float(value), name=label)
+#         elif len(np.shape(value)) == 1:
+#             par_out = [self.gekko.Param(value=float(value[i]), name=label + str(i)) for i in range(len(value))]
+#         elif len(np.shape(value)) == 2:
+#             par_shape = np.shape(value)
+#             par_out = [[self.gekko.Param(value=value[i, j], name=label + '_'.join((str(i), str(j))))
+#                          for j in range(par_shape[1])] for i in range(par_shape[0])]
+#         else:
+#             raise Exception("Currently phydra does not support 3 dimensional parameters")
+#
+#         return par_out
+#
+#     def register_flux(self, label, flux, model, dims):
+#         """ this returns storage container """
+#         label = self.check_label(label)
+#
+#         var_in_dict = {**model.variables, **model.flux_values}
+#         # need to force vectorization here, otherwise lists/arrays of gekko object are not iterated over:
+#
+#         _flux = flux(state=var_in_dict,
+#                      parameters=model.parameters,
+#                      forcings=model.forcings, vectorized=True, dims=dims)
+#
+#         if np.size(_flux) == 1:
+#             flux_out = self.gekko.Intermediate(_flux, name=label)
+#         elif len(np.shape(_flux)) == 1:
+#             flux_out = [self.gekko.Intermediate(_flux[i], name=label + str(i)) for i in range(len(_flux))]
+#         elif len(np.shape(_flux)) == 2:
+#             flx_shape = np.shape(_flux)
+#             flux_out = [[self.gekko.Intermediate(_flux[i, j], name=label + '_'.join((str(i), str(j))))
+#                          for j in range(flx_shape[1])] for i in range(flx_shape[0])]
+#         else:
+#             raise Exception("Currently phydra does not support 3 dimensional fluxes")
+#
+#         return flux_out
+#
+#     def add_forcing(self, label, forcing_func, model):
+#         """ """
+#         label = self.check_label(label)
+#
+#         return self.gekko.Param(value=forcing_func(model.time), name=label)
+#
+#     def assemble(self, model):
+#         """ """
+#         for key, value in model.variables.items():
+#             self.full_model_values[key] = value
+#             if isinstance(value, list) or isinstance(value, np.ndarray):
+#                 model.full_model_dims[key] = np.size(value)
+#             else:
+#                 model.full_model_dims[key] = None
+#
+#         for key, value in model.flux_values.items():
+#             self.full_model_values[key] = value
+#             if isinstance(value, list) or isinstance(value, np.ndarray):
+#                 if np.size(value) == np.size(model.time):
+#                     model.full_model_dims[key] = None
+#                 else:
+#                     model.full_model_dims[key] = np.size(value)
+#             else:
+#                 model.full_model_dims[key] = None
+#
+#         # finally print model repr for diagnostic purposes:
+#         print("Model dicts are assembled:")
+#         print(model)
+#
+#         print("Now assembling gekko model:")
+#         # Assign fluxes to variables:
+#         equations = []
+#
+#         # Route list input fluxes:
+#         list_input_fluxes = defaultdict(list)
+#         for flux_var_dict in model.fluxes_per_var["list_input"]:
+#             flux_label, negative, list_input = flux_var_dict.values()
+#
+#             flux_val = model.flux_values[flux_label]
+#             flux_dims = model.full_model_dims[flux_label]
+#
+#             list_var_dims = []
+#             for var in list_input:
+#                 _dim = model.full_model_dims[var]
+#                 list_var_dims.append(_dim or 1)
+#
+#             if len(list_input) == flux_dims:
+#                 for var, flux in zip(list_input, flux_val):
+#                     if negative:
+#                         list_input_fluxes[var].append(-flux)
+#                     else:
+#                         list_input_fluxes[var].append(flux)
+#             elif sum(list_var_dims) == flux_dims:
+#                 _dim_counter = 0
+#                 for var, dims in zip(list_input, list_var_dims):
+#                     flux = np.array(flux_val[_dim_counter:_dim_counter + dims])
+#                     _dim_counter += dims
+#                     if negative:
+#                         list_input_fluxes[var].append(-flux)
+#                     else:
+#                         list_input_fluxes[var].append(flux)
+#             else:
+#                 raise Exception(f"ERROR: list input vars dims {list_var_dims} and "
+#                                 f"flux output dims {flux_dims} do not match")
+#
+#         for var_label, value in model.variables.items():
+#             flux_applied = False
+#             var_fluxes = []
+#             dims = model.full_model_dims[var_label]
+#             if var_label in model.fluxes_per_var:
+#                 flux_applied = True
+#                 for flux_var_dict in model.fluxes_per_var[var_label]:
+#                     flux_label, negative, list_input = flux_var_dict.values()
+#                     _flux = model.flux_values[flux_label]
+#
+#                     flux_dims = np.size(_flux)
+#
+#                     if negative:
+#                         if flux_dims > 1 or isinstance(_flux, list) or isinstance(_flux, np.ndarray):
+#
+#                             var_fluxes.append([-_flux[i] for i in range(flux_dims)])
+#                         else:
+#                             var_fluxes.append(-_flux)
+#                     else:
+#                         if flux_dims > 1 or isinstance(_flux, list) or isinstance(_flux, np.ndarray):
+#                             var_fluxes.append([_flux[i] for i in range(flux_dims)])
+#                         else:
+#                             var_fluxes.append(_flux)
+#
+#             if var_label in list_input_fluxes:
+#                 flux_applied = True
+#                 for flux in list_input_fluxes[var_label]:
+#                     if dims:
+#                         _flux = flux
+#                     else:
+#                         _flux = np.sum(flux)
+#
+#                     var_fluxes.append(_flux)
+#
+#             if not flux_applied:
+#                 if dims:
+#                     var_fluxes.append([0 for i in range(dims)])
+#                 else:
+#                     var_fluxes.append(0)
+#
+#             if dims:
+#                 for i in range(dims):
+#                     _VAR_FLUXES = []
+#                     for var_flx in var_fluxes:
+#                         _VAR_FLUXES.append(var_flx[i])
+#                     equations.append(value[i].dt() == sum(_VAR_FLUXES))
+#             else:
+#                 _var_fluxes = []
+#                 for flx in var_fluxes:
+#                     if np.size(flx) > 1:
+#                         _var_fluxes.append(sum(flx))
+#                     else:
+#                         _var_fluxes.append(flx)
+#
+#                 equations.append(value.dt() == np.sum(_var_fluxes))
+#
+#         # create Equations
+#         self.gekko.Equations(equations)
+#
+#         self.gekko.time = model.time
+#
+#         print("Model equations:")
+#         for val in self.gekko.__dict__['_equations']:
+#             print(val.value)
+#
+#     def solve(self, model, time_step):
+#         self.gekko.options.REDUCE = 3  # handles reduction of larger models, have not benchmarked it yet
+#         self.gekko.options.NODES = 3  # improves solution accuracy
+#         self.gekko.options.IMODE = 6  # sequential dynamic Solver
+#
+#         self.gekko.solve(disp=False)  # use option disp=True to print gekko output
+#
+#     def cleanup(self):
+#         self.gekko.cleanup()

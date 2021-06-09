@@ -2,11 +2,11 @@ from setuptools import setup, find_packages
 import versioneer
 
 requirements = [
-    "attrs >= 18.1.0",
+    "attrs >=18.1.0",
     "dask",
     "numpy",
-    "xarray >= 0.10.0",
-    "zarr >= 2.3.0",
+    "xarray >=0.10.0",
+    "zarr >=2.3.0",
     "xarray-simlab",
     "scipy",
 ]
