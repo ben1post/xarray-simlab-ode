@@ -44,4 +44,4 @@ jobs:
           pip install coverage
           coverage run -m pytest
       - codecov/upload:
-          file: { { coverage_report_filepath } }
+          file: junit.xml
