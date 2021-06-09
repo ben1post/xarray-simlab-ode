@@ -41,7 +41,9 @@ jobs:
           # This assumes pytest is installed via the install-package step above
           command: pytest
       - run:
-          pip install coverage
-          coverage run -m pytest
+          name: Generate coverage
+          command: |
+              pip install coverage
+              coverage run -m pytest
       - codecov/upload:
           file: junit.xml
