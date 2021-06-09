@@ -43,7 +43,7 @@ jobs:
       - run:
           name: Generate coverage
           command: |
-              pip install coverage
+              pip install pytest-cov
               coverage run -m pytest
       - codecov/upload:
-          file: junit.xml
+          file: ./junit.xml
