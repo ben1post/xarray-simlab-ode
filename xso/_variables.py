@@ -3,7 +3,7 @@ import attr
 from enum import Enum
 
 
-class PhydraVarType(Enum):
+class XSOVarType(Enum):
     VARIABLE = "variable"
     PARAMETER = "parameter"
     FORCING = "forcing"
@@ -16,7 +16,7 @@ def variable(foreign=False, flux=None, negative=False, list_input=False,
     attrs.update({'Phydra_store_out': True})
 
     metadata = {
-        "var_type": PhydraVarType.VARIABLE,
+        "var_type": XSOVarType.VARIABLE,
         "foreign": foreign,
         "negative": negative,
         "flux": flux,
@@ -35,7 +35,7 @@ def forcing(foreign=False,
     attrs.update({'Phydra_store_out': True})
 
     metadata = {
-        "var_type": PhydraVarType.FORCING,
+        "var_type": XSOVarType.FORCING,
         "foreign": foreign,
         "setup_func": setup_func,
         "dims": dims,
@@ -49,7 +49,7 @@ def forcing(foreign=False,
 def parameter(foreign=False, dims=(), description='', attrs=None):
 
     metadata = {
-        "var_type": PhydraVarType.PARAMETER,
+        "var_type": XSOVarType.PARAMETER,
         "foreign": foreign,
         "dims": dims,
         "attrs": attrs or {},
@@ -67,7 +67,7 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
         attrs.update({'Phydra_store_out': True})
 
         metadata = {
-            "var_type": PhydraVarType.FLUX,
+            "var_type": XSOVarType.FLUX,
             "flux_func": function,
             "group": group,
             "group_to_arg": group_to_arg,
