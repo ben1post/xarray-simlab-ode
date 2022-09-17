@@ -8,7 +8,7 @@ from .solvers import SolverABC, ODEINTSolver, StepwiseSolver, GEKKOSolver
 _built_in_solvers = {'odeint': ODEINTSolver, 'gekko': 0, 'stepwise': StepwiseSolver}
 
 
-class PhydraCore:
+class XSOCore:
     """"""
 
     def __init__(self, solver):

@@ -33,8 +33,13 @@ def _convert_2_xsimlabvar(var, intent='in',
         var_dims = var.metadata.get('dims')
 
     if value_store:
+        # !ToDo here is a problem with providing dims as a list,
+        #  it only adds time dimension to the named components not the emtpy dims
+        print("VARIABLE DIMS", var_dims, type(var_dims))
         if not var_dims:
             var_dims = 'time'
+        elif 'time' in var_dims:
+            pass
         else:
             if isinstance(var_dims, str):
                 var_dims = (var_dims, 'time')

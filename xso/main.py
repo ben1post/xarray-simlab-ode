@@ -1,6 +1,6 @@
 import xsimlab as xs
 
-from xso.core import PhydraCore
+from xso.core import XSOCore
 
 
 @xs.process
@@ -12,7 +12,7 @@ class Backend:
 
     def initialize(self):
         print('initializing model backend')
-        self.m = PhydraCore(self.solver_type)
+        self.m = XSOCore(self.solver_type)
 
     def finalize(self):
         print('finalizing: cleanup')
