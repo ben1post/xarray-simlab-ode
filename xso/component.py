@@ -24,7 +24,25 @@ def _create_variables_dict(process_cls):
 def _convert_2_xsimlabvar(var, intent='in',
                           var_dims=None, value_store=False, groups=None,
                           description_label='', attrs=True):
-    """ """
+    """Converts XSO variables to Xarray-simlab variables to be used in the model backend
+
+    Function receives variable as attr in _make_phydra_variable function and extracts
+    description, dimensions and metadata, then passes it and additional arguments
+    through Xarray-simlab's xs.variable function.
+
+    Parameters
+    ----------
+    var : xxx
+        XSO variable object defined in object decorated with xso.component()
+    intent: str ('in' or 'out')
+        passed along, defines variable as receiving input from another component
+        or being initialized within this component
+
+    Returns
+    -------
+    xs.variable
+        attr class handled by Xarray-simlab, the functional foundation of XSO
+    """
     var_description = var.metadata.get('description')
     if var_description:
         description_label = description_label + var_description
@@ -32,22 +50,29 @@ def _convert_2_xsimlabvar(var, intent='in',
     if var_dims is None:
         var_dims = var.metadata.get('dims')
 
+    #
     if value_store:
-        # !ToDo here is a problem with providing dims as a list,
-        #  it only adds time dimension to the named components not the emtpy dims
-        print("VARIABLE DIMS", var_dims, type(var_dims))
         if not var_dims:
             var_dims = 'time'
         elif 'time' in var_dims:
             pass
+        elif isinstance(var_dims, str):
+            var_dims = (var_dims, 'time')
+        elif isinstance(var_dims, list):
+            _dims = []
+            for dim in var_dims:
+                if isinstance(dim, str):
+                    _dims.append((dim, 'time'))
+                else:
+                    _dims.append((*dim, 'time'))
+            var_dims = _dims
         else:
-            if isinstance(var_dims, str):
-                var_dims = (var_dims, 'time')
-            else:
-                var_dims = (*var_dims, 'time')
+            raise("Failed to read dimensions for", var, "with dimensions:", var_dims)
 
     if var_dims is None:
         var_dims = ()
+
+
 
     if attrs:
         var_attrs = var.metadata.get('attrs')
@@ -215,6 +240,7 @@ def _initialize_process_vars(cls, vars_dict):
                 _par_value = getattr(cls, key)
                 cls.m.add_parameter(label=process_label + '_' + key, value=_par_value)
             else:
+                # ToDo!
                 raise Exception("Currently Phydra does not support foreign=True for parameters -> TODO 4 v1")
 
 
