@@ -48,7 +48,6 @@ class Model:
 
     def unpack_flat_state(self, flat_state):
         """ """
-
         state_dict = defaultdict()
         index = 0
         for key, dims in self.full_model_dims.items():
@@ -62,7 +61,6 @@ class Model:
                 _length = np.prod(dims)
                 state_dict[key] = flat_state[index:index+_length].reshape(dims)  # np.array( )
                 index += _length
-
         return state_dict
 
     def model_function(self, current_state, time=None, forcing=None):

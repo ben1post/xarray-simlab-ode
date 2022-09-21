@@ -9,7 +9,7 @@ import inspect
 import numpy as np
 
 from .variables import XSOVarType
-from xso.main import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
+from xso.main import Context, FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
 
 
 def _create_variables_dict(process_cls):
@@ -184,6 +184,9 @@ def _create_forcing_dict(cls, var_dict):
 
 def _create_new_cls(cls, cls_dict, init_stage):
     """ """
+    # TODO! this should either make use of native ordering algorithm
+    #   or order processes based on supplied xso variables
+    #   for now, not sure how to do, so will leave it as such
     if init_stage == 1:
         new_cls = type(cls.__name__, (FirstInit,), cls_dict)
     elif init_stage == 2:
