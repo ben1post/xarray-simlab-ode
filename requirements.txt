@@ -1,8 +1,0 @@
-attrs >= 18.1.0
-dask
-numpy~=1.19.1
-xarray >= 0.10.0
-zarr >= 2.3.0
-xarray-simlab
-scipy~=1.5.2
-pytest-cov

@@ -5,10 +5,15 @@ import math
 from .model import Model
 from .solvers import SolverABC, ODEINTSolver, StepwiseSolver, GEKKOSolver
 
-_built_in_solvers = {'odeint': ODEINTSolver, 'gekko': 0, 'stepwise': StepwiseSolver}
+_built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
+
+# TODO!: Actually pass along math functions to Solver as needed,
+#   how to do this though?
+#   - allow passing custom math attribute and supply default
+#   - if self.solver.add exists, use it, else: numpy
 
 
-class PhydraCore:
+class XSOCore:
     """"""
 
     def __init__(self, solver):
