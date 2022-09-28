@@ -12,11 +12,24 @@ _built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
 #   - allow passing custom math attribute and supply default
 #   - if self.solver.add exists, use it, else: numpy
 
+# TODO: Actually this could all be handled by Model class, right?
+#   is there a need for this class actually?????
+
 
 class XSOCore:
-    """"""
+    """Core model object.
+
+    Basic core class that collects solver object and model object and is shared between all model components.
+    """
 
     def __init__(self, solver):
+        """
+        Parameters
+        ----------
+        solver : {'stepwise', 'odeint'} or subclass of SolverABC
+           Solver name as str, has to be built into xso
+           Alternatively can be passed a custom subclass of xso.solver.SoverABC
+        """
         self.counter = 0
 
         self.Model = Model()
@@ -32,9 +45,23 @@ class XSOCore:
             raise Exception("Solver argument passed to model is not built-in or subclass of SolverABC")
 
     def add_variable(self, label, initial_value=0):
-        """
-        function that takes the state variable setup as input
-        and returns the storage values
+        """Adding a variable to the model.
+
+        Function that takes the state variable setup as input
+        and returns the storage values.
+
+        Parameters
+        ----------
+        label : string
+           this is the reference string to be used across the model
+        initial_value : numerical, optional
+            the initial value of the variable within the model
+            default value is 0, if none is supplied
+
+        Returns
+        _______
+        xxx : type
+            explanation
         """
         # the following step registers the variable within the framework
         self.Model.variables[label] = self.Solver.add_variable(label, initial_value, self.Model)

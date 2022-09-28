@@ -40,10 +40,10 @@ If you are proposing a feature:
 
 ## Get Started!
 
-Ready to contribute? Here's how to set up `xarray_simlab_ode` for local development.
+Ready to contribute? Here's how to set up `xarray-simlab-ode` for local development.
 
-1. Download a copy of `xarray_simlab_ode` locally.
-2. Install `xarray_simlab_ode` using `poetry`:
+1. Download a copy of `xarray-simlab-ode` locally.
+2. Install `xarray-simlab-ode` using `poetry`:
 
     ```console
     $ poetry install
@@ -66,8 +66,3 @@ Before you submit a pull request, check that it meets these guidelines:
 1. The pull request should include additional tests if appropriate.
 2. If the pull request adds functionality, the docs should be updated.
 3. The pull request should work for all currently supported operating systems and versions of Python.
-
-## Code of Conduct
-
-Please note that the `xarray_simlab_ode` project is released with a
-Code of Conduct. By contributing to this project you agree to abide by its terms.

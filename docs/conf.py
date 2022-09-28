@@ -6,7 +6,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = u"xarray_simlab_ode"
+project = u"xarray-simlab-ode"
 copyright = u"2022, Benjamin Post"
 author = u"Benjamin Post"
 

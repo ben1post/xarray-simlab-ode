@@ -22,8 +22,7 @@ class SolverABC(ABC):
     """ abstract base class of backend solver class,
     use subclass to solve model within the Phydra framework
 
-    TODO:
-        - add all necessary abstract methods and add quick & dirty docs
+    TODO: add all necessary abstract methods and add quick & dirty docs
     """
 
     @abstractmethod
