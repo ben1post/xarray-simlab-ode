@@ -1,8 +1,46 @@
+import pytest
 import xso
+import xsimlab as xs
+from xso.main import Backend
 
-def test_variable():
-    """Test variable function."""
+# TODO:
+#   - add tests for each variable type
+#   - add tests for XSOCore class, Model class
+#   - add tests for Solvers
+#   - add tests for different usages of components within a model
+#   - add tests for different Model inputs
 
-    expected = xso.variable()
-    actual = xso.variable()
-    assert actual == expected, "xso.variable is weird"
+# The way I wrote the framework seems to be not very amendable to testing, or
+# am I seriously misunderstanding something
+# One Tip: Write failing test, then modify code to pass test
+#
+# Unit testing is for testing the things the code is supposed to do
+#   testing the different inputs it can receive
+#   testing the types of usages it should be able to render
+#
+#
+
+
+@pytest.fixture
+def backend():
+    # create and initialize backend to be able to initialize test component
+    example_backend = Backend(solver_type='stepwise')
+    example_backend.initialize()
+    return example_backend
+
+
+def test_component(backend):
+    # test constructor
+
+    @xso.component
+    class TestComp:
+        # basic class using two types of variables
+        some_var = xso.variable()
+        another_var = xso.variable(foreign=True)
+
+    test_comp = TestComp(m=backend.m, some_var_label='X', some_var_init=2, another_var='Y')
+    test_comp.__xsimlab_name__ = 'TEST'
+
+    test_comp.initialize()
+    print("hello")
+    assert test_comp.some_var_init == 2

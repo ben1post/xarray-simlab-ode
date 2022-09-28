@@ -2,8 +2,8 @@ import time as tm
 import numpy as np
 import math
 
-from .model import Model
-from .solvers import SolverABC, ODEINTSolver, StepwiseSolver, GEKKOSolver
+from xso.model import Model
+from xso.solvers import SolverABC, ODEINTSolver, StepwiseSolver, GEKKOSolver
 
 _built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
 

@@ -72,8 +72,6 @@ def _convert_2_xsimlabvar(var, intent='in',
     if var_dims is None:
         var_dims = ()
 
-
-
     if attrs:
         var_attrs = var.metadata.get('attrs')
     else:
