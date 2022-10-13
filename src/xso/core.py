@@ -28,9 +28,9 @@ class XSOCore:
         ----------
         solver : {'stepwise', 'odeint'} or subclass of SolverABC
            Solver name as str, has to be built into xso
-           Alternatively can be passed a custom subclass of xso.solver.SoverABC
+           Alternatively can be passed a custom subclass of xso.solver.SolverABC
         """
-        self.counter = 0
+        self.counter = 0  # this is a hack that is used in
 
         self.Model = Model()
 

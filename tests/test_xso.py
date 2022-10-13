@@ -20,6 +20,10 @@ from xso.main import Backend
 #
 #
 
+# TODO:
+#   - add tests for supplying similarly named variables both at component construction
+#   - and at model setup, this needs to raise an understandable error in code, and check that here
+
 
 @pytest.fixture
 def backend():
