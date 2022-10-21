@@ -3,14 +3,14 @@ from xsimlab.variable import VarIntent
 
 from collections import defaultdict
 
-from xso.main import Backend, Solver, Time
+from xso.backendcomps import Backend, RunSolver, Time
 
 
 def create(model_dict):
     """Function creates xsimlab Model instance,
     automatically adding the necessary model backend, solver and time components"""
 
-    model_dict.update({'Core': Backend, 'Solver': Solver, 'Time': Time})
+    model_dict.update({'Core': Backend, 'Solver': RunSolver, 'Time': Time})
     return xs.Model(model_dict)
 
 
@@ -37,19 +37,19 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
     elif isinstance(output_vars, set):
         output_vars = {var: None for var in output_vars}
 
-    if solver == "odeint" or solver == "gekko":
+    if solver != "stepwise":
+        # if a custom solver is used (e.g. odeint) timesteps are handled by that solver
         return xs.create_setup(model=model,
-                               # supply a single Time step to xsimlab model setup
+                               # supply a single time step to xsimlab clock
                                clocks={'clock': [time[0], time[1]]},
                                input_vars=input_vars,
                                output_vars=output_vars)
-    elif solver == "stepwise":
+    else:
+        # stepwise solver uses defined time as xsimlab clock
         return xs.create_setup(model=model,
                                clocks={'clock': time},
                                input_vars=input_vars,
                                output_vars=output_vars)
-    else:
-        raise Exception("Please supply one of the available solvers: 'odeint', 'gekko' or 'stepwise'")
 
 
 def update_setup(model, old_setup, new_solver, new_time=None):
@@ -61,17 +61,15 @@ def update_setup(model, old_setup, new_solver, new_time=None):
     else:
         time = new_time
 
-    if new_solver == "odeint" or new_solver == "gekko":
+    if new_solver != "stepwise":
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
                                                                'Time__time': time})
             setup2 = setup1.xsimlab.update_clocks(clocks={'clock': [time[0], time[1]]}, master_clock='clock')
-    elif new_solver == "stepwise":
+    else:
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
                                                                'Time__time': time})  # ,
             setup2 = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
-    else:
-        raise Exception("Please supply one of the available solvers: 'odeint', 'gekko' or 'stepwise'")
 
     return setup2

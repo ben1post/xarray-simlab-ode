@@ -8,20 +8,23 @@ class Backend:
     """this object contains the backend model and is modified or read by all other components"""
 
     solver_type = xs.variable(intent='in')
-    m = xs.any_object(description='model backend instance is stored here')
+    core = xs.any_object(description='model backend instance is stored here')
+    m = xs.any_object(description='math wrapper functions provided by solver')
 
     def initialize(self):
         print('initializing model backend')
-        self.m = XSOCore(self.solver_type)
+        self.core = XSOCore(self.solver_type)
+        self.m = self.core.solver.MathFunctionWrappers
 
     def finalize(self):
         print('finalizing: cleanup')
-        self.m.cleanup()  # for now only affects gekko solve
+        self.core.cleanup()  # for now only affects gekko solve
 
 
 @xs.process
 class Context:
     """ Inherited by all other model components to access backend"""
+    core = xs.foreign(Backend, 'core')
     m = xs.foreign(Backend, 'm')
 
     label = xs.variable(intent='out', groups='label')
@@ -89,7 +92,7 @@ class FifthInit(Context):
 
 
 @xs.process
-class Solver(Context):
+class RunSolver(Context):
     """ Solver process executed last """
     firstinit = xs.group('FirstInit')
     secondinit = xs.group('SecondInit')
@@ -100,12 +103,12 @@ class Solver(Context):
     def initialize(self):
         """"""
         print("assembling model")
-        print("SOLVER :", self.m.Solver)
-        self.m.assemble()
+        print("SOLVER :", self.core.solver)
+        self.core.assemble()
 
     @xs.runtime(args="step_delta")
     def run_step(self, dt):
-        self.m.solve(dt)
+        self.core.solve(dt)
 
 
 @xs.process
@@ -119,13 +122,16 @@ class Time(FirstInit):
     def initialize(self):
         print('Initializing Model Time')
         self.label = self.__xsimlab_name__
-        self.m.Model.time = self.time
+        self.core.model.time = self.time
 
-        self.value = self.m.add_variable('time')
+        self.value = self.core.add_variable('time')
 
-        self.m.register_flux(self.label + '_' + self.time_flux.__name__, self.time_flux)
-        self.m.add_flux(self.label, 'time', 'time_flux')
+        self.core.register_flux(self.label + '_' + self.time_flux.__name__, self.time_flux)
+        self.core.add_flux(self.label, 'time', 'time_flux')
 
     def time_flux(self, **kwargs):
+        """Simple linear flux, that represents time within model.
+        Necessary for external solvers like odeint.
+        """
         dtdt = 1
         return dtdt

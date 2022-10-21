@@ -1,5 +1,5 @@
 from .component import component
-from .model import Model
+from .core import XSOCore
 
 from .variables import variable, parameter, forcing, flux
 

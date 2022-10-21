@@ -1,7 +1,10 @@
 from collections import defaultdict
+
 import numpy as np
 
-# from itertools import zip_longest as zip
+from xso.solvers import ODEINTSolver, StepwiseSolver
+
+_built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
 
 
 def return_dim_ndarray(value):
@@ -15,13 +18,11 @@ def return_dim_ndarray(value):
 
 
 class Model:
-    """Backend model class
-    - collects all things relevant to the model instance (i.e. variables, parameters, ...)
-    - can be solved by passing it to the SolverABC class (that's where conversion (if necessary) happens)
+    """Base storage dictionary instationated once within Model
+    and filled with the specific model relevant values
+
     """
-
     def __init__(self):
-
         self.time = None
 
         self.variables = defaultdict()
@@ -39,12 +40,14 @@ class Model:
         self.full_model_dims = defaultdict()
 
     def __repr__(self):
+        """Simple repr implementation that prints major model components"""
         return (f"Model contains: \n"
                 f"Variables:{[var for var in self.variables]} \n"
                 f"Parameters:{[par for par in self.parameters]} \n"
                 f"Forcings:{[forc for forc in self.forcings]} \n"
                 f"Fluxes:{[flx for flx in self.fluxes]} \n"
                 f"Full Model Dimensions:{[(state,dim) for state,dim in self.full_model_dims.items()]} \n")
+
 
     def unpack_flat_state(self, flat_state):
         """ """
@@ -167,3 +170,4 @@ class Model:
                                       [v for val in fluxes_out for v in val.ravel()]], axis=None)
 
         return full_output
+

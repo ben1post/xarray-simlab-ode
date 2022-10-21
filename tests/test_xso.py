@@ -1,7 +1,7 @@
 import pytest
 import xso
 import xsimlab as xs
-from xso.main import Backend
+from xso.backendcomps import Backend
 
 # TODO:
 #   - add tests for each variable type
@@ -42,7 +42,7 @@ def test_component(backend):
         some_var = xso.variable()
         another_var = xso.variable(foreign=True)
 
-    test_comp = TestComp(m=backend.m, some_var_label='X', some_var_init=2, another_var='Y')
+    test_comp = TestComp(m=backend.core, some_var_label='X', some_var_init=2, another_var='Y')
     test_comp.__xsimlab_name__ = 'TEST'
 
     test_comp.initialize()
