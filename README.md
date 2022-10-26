@@ -1,6 +1,10 @@
 # xarray-simlab-ode
 
-The`xso`Framework for building and solving ODE-based models, an extension of xarray-simlab.
+The`xso`Framework for building and solving ODE-based models, an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
+
+xarray-simlab provides a generic framework for building computational models in a modular fashion and an [xarray](http://xarray.pydata.org/) extension for setting and running simulations using xarray's Dataset structure.
+
+xarray-simlab-ode extends the framework with a set of variables, processes and a solver backend, suited towards models based on differential equations. It is designed for flexible, interactive and reproducible modeling.
 
 ## Installation
 
@@ -8,9 +12,9 @@ The`xso`Framework for building and solving ODE-based models, an extension of xar
 $ pip install xso
 ```
 
-## Usage
+## In a nutshell
 A highly simplified model based on ordinary differential equations is shown below.
-1. Create Create new model components by writing compact Python classes:
+1. Create new model components by writing compact Python classes:
 ```python
 import xso
 
@@ -34,11 +38,14 @@ model = xso.create({'Var':Variable,'Growth':LinearGrowth})
 3. Create an input xarray.Dataset, run the model and get an output xarray.Dataset:
 
 ```python
+import numpy as np
+
 input_ds = xso.setup(solver='stepwise',
                      model=model,
+                     time=np.arange(1,10),
                      input_vars={
                          'Var':{'var_label':'X', 'var_init':1},
-                         'Growth':{'var':'A', 'rate':1.},
+                         'Growth':{'var_ext':'X', 'rate':1.},
                      })
 
 with model:
@@ -46,12 +53,21 @@ with model:
 ```
 4.Perform model setup, pre-processing, run, post-processing and visualization in a functional style, using method chaining:
 ```python
-'xxx'
+with model:
+    batchout_ds = (input_ds
+     .xsimlab.update_vars(
+         input_vars={'Growth': {'rate': ('batch', [0.9, 1.0, 1.1, 1.2])}}
+     )
+     .xsimlab.run(parallel=True, batch_dim='batch')
+     .swap_dims({'batch':'Growth__rate'})
+     .Var__var_value.plot.line(x='time')
+     )
 ```
+![plot](docs/_static/GrowthRate_BatchOut.png)
 
 ## Contributing
 
-The package is in the early stages of development, and contributions would be very welcome. See GitHub Issues for specific issues, or raise your own.
+The package is in the early stages of development, and contributions are very welcome. See GitHub Issues for specific issues, or raise your own.
 Code contributions can be made via Pull Requests on GitHub.
 Check out the contributing guidelines for more specific information.
 
@@ -59,7 +75,6 @@ Check out the contributing guidelines for more specific information.
 
 xarray-simlab-ode was created by Benjamin Post. 
 It is licensed under the terms of the BSD 3-Clause license.
-- licences of dependencies?
 
 ## Credits
 

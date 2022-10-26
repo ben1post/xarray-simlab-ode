@@ -306,7 +306,6 @@ def _initialize_fluxes(cls, vars_dict):
 
             if var.metadata.get('group'):
                 setattr(cls, flux_func.__name__ + '_label', label)
-                print(getattr(cls, flux_func.__name__ + '_label'))
 
             setattr(cls, key + '_value',
                     cls.core.register_flux(label=label, flux=cls.flux_decorator(flux_func), dims=flux_dim))
@@ -384,7 +383,6 @@ def component(cls=None, *, init_stage=3):
         def initialize(self):
             """ """
             super(new_cls, self).initialize()
-            print(f"Initializing component {self.label}")
 
             _initialize_process_vars(self, vars_dict)
 
@@ -405,8 +403,7 @@ def component(cls=None, *, init_stage=3):
         for attribute in cls_dir:
             if hasattr(cls, attribute) and callable(getattr(cls, attribute)):
                 if not attribute.startswith("__") and attribute not in _forcing_input_functions:
-                    print("setting new attr method")
-                    print(attribute)
+                    # Allow setting custom attr method, to be used in component
                     setattr(process_cls, attribute, getattr(cls, attribute))
 
         return process_cls

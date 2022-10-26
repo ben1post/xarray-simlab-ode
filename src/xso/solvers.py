@@ -173,9 +173,10 @@ class ODEINTSolver(SolverABC):
         for flx_key, dim in model.flux_dims.items():
             model.full_model_dims[flx_key] = dim
 
+        # TODO: diagnostic print here
         # print model repr for diagnostic purposes:
-        print("Model is assembled:")
-        print(model)
+        #print("Model is assembled:")
+        #print(model)
 
     def solve(self, model, time_step):
         """ """
@@ -326,9 +327,10 @@ class StepwiseSolver(SolverABC):
             model.full_model_dims[flx_key] = _dims
             self.full_model_values[flx_key] = value
 
+        # TODO: diagnostic print here
         # finally print model repr for diagnostic purposes:
-        print("Model is assembled:")
-        print(model)
+        #print("Model is assembled:")
+        #print(model)
 
     def solve(self, model, time_step):
         self.model_time += time_step

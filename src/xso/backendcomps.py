@@ -12,12 +12,12 @@ class Backend:
     m = xs.any_object(description='math wrapper functions provided by solver')
 
     def initialize(self):
-        print('initializing model backend')
+        """initializing model backend"""
         self.core = XSOCore(self.solver_type)
         self.m = self.core.solver.MathFunctionWrappers
 
     def finalize(self):
-        print('finalizing: cleanup')
+        """finalizing: cleanup"""
         self.core.cleanup()  # for now only affects gekko solve
 
 
@@ -102,8 +102,9 @@ class RunSolver(Context):
 
     def initialize(self):
         """"""
-        print("assembling model")
-        print("SOLVER :", self.core.solver)
+        # TODO: diagnostic print here
+        #print("assembling model")
+        #print("SOLVER :", self.core.solver)
         self.core.assemble()
 
     @xs.runtime(args="step_delta")
@@ -120,7 +121,7 @@ class Time(FirstInit):
     value = xs.variable(intent='out', dims='time')
 
     def initialize(self):
-        print('Initializing Model Time')
+        """Initializing Model Time"""
         self.label = self.__xsimlab_name__
         self.core.model.time = self.time
 
