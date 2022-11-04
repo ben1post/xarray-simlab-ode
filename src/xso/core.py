@@ -96,7 +96,7 @@ class XSOCore:
     def add_forcing(self, label, forcing_func):
         """"""
         self.model.forcing_func[label] = forcing_func
-        self.model.forcings[label] = self.solver.add_forcing(label, forcing_func, self)
+        self.model.forcings[label] = self.solver.add_forcing(label, forcing_func, self.model)
         return self.model.forcings[label]
 
     def assemble(self):

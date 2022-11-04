@@ -55,11 +55,14 @@ def _convert_2_xsimlabvar(var, intent='in',
     #
     if value_store:
         if not var_dims:
+            # if there is no dim supplied, we need 'time' as
             var_dims = 'time'
         elif 'time' in var_dims:
             pass
         elif isinstance(var_dims, str):
             var_dims = (var_dims, 'time')
+        elif isinstance(var_dims, tuple):
+            var_dims = var_dims + ('time',)
         elif isinstance(var_dims, list):
             _dims = []
             for dim in var_dims:
@@ -69,7 +72,9 @@ def _convert_2_xsimlabvar(var, intent='in',
                     _dims.append((*dim, 'time'))
             var_dims = _dims
         else:
-            raise ValueError("Failed to pars dims argument for", var, "with dimensions:", var_dims)
+            raise ValueError("Failed to parse dims argument for variable of type:",
+                             var.metadata["var_type"], "with description:", description_label,
+                             "with dimensions:", var_dims)
 
     if var_dims is None:
         var_dims = ()
