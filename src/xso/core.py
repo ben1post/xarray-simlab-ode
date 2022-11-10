@@ -8,22 +8,9 @@ from xso.solvers import SolverABC, ODEINTSolver, StepwiseSolver
 _built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
 
 
-# TODO: Actually this could all be handled by Model class, right?
-#   is there a need for this class actually?????
-
-#TODO
-# SO essentially this whole Core class can be replaced by the solver
-# but how do I check if the solver is available, where to provide that input?
-# s
-# so...
-
-
-
 class XSOCore:
-    """Backend core class
-    - initializes solver and model
-    - translates between the two for model solving
-
+    """Backend core class that initializes solver and model, and
+    translates between the two for model construction and solving.
     """
 
     def __init__(self, solver):

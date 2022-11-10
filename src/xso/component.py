@@ -9,14 +9,12 @@ import inspect
 import numpy as np
 
 from .variables import XSOVarType
-from xso.backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
+from xso.backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit
 
-# TODO:
-#   - add proper documentation to the functions below, this is key
 
 def _create_variables_dict(process_cls):
     """Get all phydra variables declared in a component.
-    Exclude attr.Attribute objects that are not xsimlab-specific.
+    Exclude attr.Attribute objects that are not XSO specific.
     """
     return OrderedDict(
         (k, v) for k, v in fields_dict(process_cls).items() if "var_type" in v.metadata
@@ -26,25 +24,38 @@ def _create_variables_dict(process_cls):
 def _convert_2_xsimlabvar(var, intent='in',
                           var_dims=None, value_store=False, groups=None,
                           description_label='', attrs=True):
-    """Converts XSO variables to Xarray-simlab variables to be used in the model backend
+    """Converts XSO variables to xarray-simlab variables to be used in the model backend.
 
     Function receives variable as attr in _make_phydra_variable function and extracts
     description, dimensions and metadata, then passes it and additional arguments
-    through Xarray-simlab's xs.variable function.
+    through xarray-simlab's xs.variable function.
 
     Parameters
     ----------
-    var : xxx
-        XSO variable object defined in object decorated with xso.component()
-    intent: str ('in' or 'out')
+    var : attr._Make.Attribute
+        XSO variable defined in object decorated with xso.component()
+    intent : str ('in' or 'out')
         passed along, defines variable as receiving input from another component
-        or being initialized within this component
+        or being initialized within this component.
+    var_dims : tuple or str
+        Defines dimensionality of created xsimlab variable,
+        can be singular string or tuple of strings.
+    value_store : bool
+        When true, the ouput of variable is stored to xsimlab variable. Adds 'time' dimension.
+    groups : str
+        When defined, the variable output can be referenced via xarray simlabs
+        group variable in other XSO components.
+    description_label : str
+        Description stored with Xarray Dataset created by xsimlab.
+    attrs : bool
+        If true, attrs defined in variable metadata are passed along to xsimlab variable function.
 
     Returns
     -------
     xs.variable
         attr class handled by Xarray-simlab, the functional foundation of XSO
     """
+    print(type(var))
     var_description = var.metadata.get('description')
     if var_description:
         description_label = description_label + var_description
@@ -84,11 +95,14 @@ def _convert_2_xsimlabvar(var, intent='in',
     else:
         var_attrs = {}
 
-    return xs.variable(intent=intent, dims=var_dims, groups=groups, description=description_label, attrs=var_attrs)
+    return xs.variable(intent=intent, dims=var_dims, groups=groups,
+                       description=description_label, attrs=var_attrs)
 
 
 def _make_xso_variable(label, variable):
-    """ """
+    """Checks for type of variable defined and calls _convert_2_xsimlabvar function
+    accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+    """
     xs_var_dict = defaultdict()
     if variable.metadata.get('foreign') is True:
         list_input = variable.metadata.get('list_input')
@@ -112,14 +126,18 @@ def _make_xso_variable(label, variable):
 
 
 def _make_xso_parameter(label, variable):
-    """ """
+    """Checks for type of variable defined and calls _convert_2_xsimlabvar function
+    accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+    """
     xs_var_dict = defaultdict()
     xs_var_dict[label] = _convert_2_xsimlabvar(var=variable)
     return xs_var_dict
 
 
 def _make_xso_forcing(label, variable):
-    """ """
+    """Checks for type of variable defined and calls _convert_2_xsimlabvar function
+    accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+    """
     xs_var_dict = defaultdict()
     if variable.metadata.get('foreign') is True:
         xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, description_label='label reference / ')
@@ -132,7 +150,9 @@ def _make_xso_forcing(label, variable):
 
 
 def _make_xso_flux(label, variable):
-    """ """
+    """Checks for type of variable defined and calls _convert_2_xsimlabvar function
+    accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+    """
     xs_var_dict = defaultdict()
     xs_var_dict[label + '_value'] = _convert_2_xsimlabvar(var=variable, intent='out',
                                                           value_store=True,
@@ -162,7 +182,12 @@ _make_xsimlab_vars = {
 
 
 def _create_xsimlab_var_dict(cls_vars):
-    """ """
+    """Parses through attributes defined in xso.component decorated class
+    and extracts those relevant for XSO.
+
+    These are initialized as xsimlab variables
+    and returned in dict to xso.component decorated class.
+    """
     xs_var_dict = defaultdict()
 
     for key, var in cls_vars.items():
@@ -175,7 +200,7 @@ def _create_xsimlab_var_dict(cls_vars):
 
 
 def _create_forcing_dict(cls, var_dict):
-    """ """
+    """Parses var_dict and extracts forcing setup function"""
     forcings_dict = defaultdict()
 
     for key, var in var_dict.items():
@@ -188,27 +213,29 @@ def _create_forcing_dict(cls, var_dict):
 
 
 def _create_new_cls(cls, cls_dict, init_stage):
-    """ """
-    # TODO! this should either make use of native ordering algorithm
-    #   or order processes based on supplied xso variables
-    #   for now, not sure how to do, so will leave it as such
-    if init_stage == 1:
+    """Method to initialize XSO component with appropriate parent class
+    from xso.backendcomps, which defines initialisation stage and
+    inherits from Context class.
+
+    ToDo: Make use of xsimlab's automatic ordering algorithm
+    """
+    if init_stage == "solver":
         new_cls = type(cls.__name__, (FirstInit,), cls_dict)
-    elif init_stage == 2:
+    elif init_stage == "forcing":
         new_cls = type(cls.__name__, (SecondInit,), cls_dict)
-    elif init_stage == 3:
+    elif init_stage == "variable":
         new_cls = type(cls.__name__, (ThirdInit,), cls_dict)
-    elif init_stage == 4:
+    elif init_stage == "flux":
         new_cls = type(cls.__name__, (FourthInit,), cls_dict)
-    elif init_stage == 5:
-        new_cls = type(cls.__name__, (FifthInit,), cls_dict)
     else:
-        raise Exception("Wrong init_stage supplied, needs to be 1, 2, 3, 4 or 5")
+        raise Exception("Wrong init_stage supplied, needs to be 'solver', 'forcing', 'variable' or 'flux'")
     return new_cls
 
 
 def _initialize_process_vars(cls, vars_dict):
-    """ """
+    """Parses vars_dict of xso.component decorated class, and
+    initializes defined variables and methods with model backend.
+    """
     process_label = cls.label
     for key, var in vars_dict.items():
         var_type = var.metadata.get('var_type')
@@ -223,7 +250,6 @@ def _initialize_process_vars(cls, vars_dict):
                 setattr(cls, key + '_value', cls.core.add_variable(label=_label, initial_value=_init))
 
             flux_label = var.metadata.get('flux')
-            # TODO: use dict mapping for flux + negative statements, instead of two separate args and lists
             flux_negative = var.metadata.get('negative')
             list_input = var.metadata.get('list_input')
 
@@ -255,7 +281,7 @@ def _initialize_process_vars(cls, vars_dict):
 
 
 def _create_flux_inputargs_dict(cls, vars_dict):
-    """ """
+    """Creates a dictionary to parse the input arguments to a flux function."""
     input_arg_dict = defaultdict(list)
     _check_duplicate_group_arg = []
 
@@ -276,7 +302,7 @@ def _create_flux_inputargs_dict(cls, vars_dict):
 
         elif var_type is XSOVarType.PARAMETER:
             par_dim = var.metadata.get('dims')
-            # TODO: so it doesn't work with foreign parameters here yet!
+            # TODO: Implement foreign parameters here
             input_arg_dict['pars'].append({'var': key, 'label': cls.label + '_' + key, 'dim': par_dim})
 
         elif var_type is XSOVarType.FORCING:
@@ -301,7 +327,9 @@ def _create_flux_inputargs_dict(cls, vars_dict):
 
 
 def _initialize_fluxes(cls, vars_dict):
-    """ """
+    """Parses flux variables and methods in xso.component decorated class
+    and registers them with the model backend.
+    """
     for key, var in vars_dict.items():
         var_type = var.metadata.get('var_type')
         if var_type is XSOVarType.FLUX:
@@ -317,7 +345,9 @@ def _initialize_fluxes(cls, vars_dict):
 
 
 def _initialize_forcings(cls, forcing_dict):
-    """ """
+    """Parses xso.forcing variables and methods defined in xso.component decorated class
+    and registers them with the model backend.
+    """
     for var, forc_input_func in forcing_dict.items():
         forc_label = getattr(cls, var + '_label')
 
@@ -333,13 +363,28 @@ def _initialize_forcings(cls, forcing_dict):
                 cls.core.add_forcing(label=forc_label, forcing_func=forc_func))
 
 
-def component(cls=None, *, init_stage=3):
-    """ component decorator
-    that converts simple base class using phydra.backend.variables into fully functional xarray simlab process
+def component(cls=None, *, init_stage="variable"):
+    """A component decorator that adds everything needed to use the class
+    as a XSO component. It is a wrapper for the xarray-simlab process decorator.
+
+    A component represents a logical unit with the model, and usually implements:
+
+    - A set of XSO variables, defined as class attributes, e.g. xso.variable, xso.parameter,
+    xso.forcing or xso.flux.
+
+    - One or more methods that can be functions defining a xso.flux or a xso.forcing.
+
+    Parameters
+    __________
+    cls : class, optional
+        Allows applying this decorator either as @xso.component or @xso.component(*args).
+    init_stage : str
+        Allows setting explicit initialization stage. Currently this is necessary, because
+        the XSO backend does not support automatic ordering yet.
     """
 
     def create_component(cls):
-
+        """Function to construct new class and return xarray-simlab process"""
         attr_cls = attr.attrs(cls, repr=False)
         vars_dict = _create_variables_dict(attr_cls)
         forcing_dict = _create_forcing_dict(cls, vars_dict)
@@ -347,7 +392,7 @@ def component(cls=None, *, init_stage=3):
         new_cls = _create_new_cls(cls, _create_xsimlab_var_dict(vars_dict), init_stage)
 
         def flux_decorator(self, func):
-            """ flux function decorator to unpack arguments """
+            """XSO flux function decorator to unpack arguments"""
 
             @wraps(func)
             def unpack_args(**kwargs):
@@ -386,7 +431,9 @@ def component(cls=None, *, init_stage=3):
             return unpack_args
 
         def initialize(self):
-            """ """
+            """Defines xarray-simlab process `initialize` method
+            that is executed at model runtime.
+            """
             super(new_cls, self).initialize()
 
             _initialize_process_vars(self, vars_dict)
@@ -400,6 +447,7 @@ def component(cls=None, *, init_stage=3):
         setattr(new_cls, 'flux_decorator', flux_decorator)
         setattr(new_cls, 'initialize', initialize)
 
+        # constructed class is passed through xsimlab process decorator:
         process_cls = xs.process(new_cls)
 
         # allow passing helper functions through to process class

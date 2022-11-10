@@ -20,9 +20,14 @@ def return_dim_ndarray(value):
 class Model:
     """Base storage dictionary instationated once within Model
     and filled with the specific model relevant values
-
     """
+
     def __init__(self):
+        """Initializing the model class
+
+        sets up a range of defaultdicts to store model variables flexibly,
+        before initializing them in Xarray-simlab backend
+        """
         self.time = None
 
         self.variables = defaultdict()

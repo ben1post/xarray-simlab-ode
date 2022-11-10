@@ -1,10 +1,10 @@
 # xarray-simlab-ode
 
-The`xso`Framework for building and solving ODE-based models, an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
+The `xso` framework for building and solving models based on ordinary differential equations (ODEs), an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
 
-xarray-simlab provides a generic framework for building computational models in a modular fashion and an [xarray](http://xarray.pydata.org/) extension for setting and running simulations using xarray's Dataset structure.
+Xarray-simlab provides a generic framework for building computational models in a modular fashion and an [xarray](http://xarray.pydata.org/) extension for setting and running simulations using xarray's `Dataset` structure.
 
-xarray-simlab-ode extends the framework with a set of variables, processes and a solver backend, suited towards models based on differential equations. It is designed for flexible, interactive and reproducible modeling.
+Xarray-simlab-ode (XSO) extends the framework with a set of variables, processes and a solver backend, suited towards ODE-based models. It is designed for flexible, interactive and reproducible modeling workflows.
 
 ## Installation
 
@@ -64,6 +64,10 @@ with model:
      )
 ```
 ![plot](docs/_static/GrowthRate_BatchOut.png)
+
+## Documentation
+
+Documentation is hosted on ReadTheDocs: [https://xarray-simlab-ode.readthedocs.io](https://xarray-simlab-ode.readthedocs.io/en/latest/)
 
 ## Contributing
 
