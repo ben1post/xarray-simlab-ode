@@ -8,7 +8,7 @@ _built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
 
 
 def return_dim_ndarray(value):
-    """ helper function to always have at least 1d numpy array returned """
+    """Helper function to always have at least 1d numpy array returned."""
     if isinstance(value, list):
         return np.array(value)
     elif isinstance(value, np.ndarray):
@@ -25,7 +25,7 @@ class Model:
     def __init__(self):
         """Initializing the model class
 
-        sets up a range of defaultdicts to store model variables flexibly,
+        sets up defaultdicts to store model variables flexibly,
         before initializing them in Xarray-simlab backend
         """
         self.time = None
@@ -45,7 +45,7 @@ class Model:
         self.full_model_dims = defaultdict()
 
     def __repr__(self):
-        """Simple repr implementation that prints major model components"""
+        """Simple repr implementation that prints model components"""
         return (f"Model contains: \n"
                 f"Variables:{[var for var in self.variables]} \n"
                 f"Parameters:{[par for par in self.parameters]} \n"
@@ -142,17 +142,14 @@ class Model:
                 flux_applied = True
                 for flux_var_dict in self.fluxes_per_var[var_label]:
                     flux_label, negative, list_input = flux_var_dict.values()
-
                     if dims:
                         _flux = flux_values[flux_label]
                     else:
                         _flux = np.sum(flux_values[flux_label])
-
                     if negative:
                         var_fluxes.append(-_flux)
                     else:
                         var_fluxes.append(_flux)
-
             if var_label in list_input_fluxes:
                 flux_applied = True
                 for flux in list_input_fluxes[var_label]:
@@ -161,7 +158,6 @@ class Model:
                     else:
                         _flux = np.sum(flux)
                     var_fluxes.append(_flux)
-
             if not flux_applied:
                 dims = self.full_model_dims[var_label]
                 if dims:
