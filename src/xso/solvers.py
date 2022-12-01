@@ -8,7 +8,7 @@ from scipy.integrate import odeint
 
 
 def to_ndarray(value):
-    """ helper function to always have at least 1d numpy array returned """
+    """Helper function to always have at least 1d numpy array returned."""
     if isinstance(value, list):
         return np.array(value)
     elif isinstance(value, np.ndarray):
@@ -18,38 +18,47 @@ def to_ndarray(value):
 
 
 class SolverABC(ABC):
-    """ abstract base class of backend solver class,
-    use subclass to solve model within the Phydra framework
-
-    TODO: add all necessary abstract methods and add quick & dirty docs
+    """Abstract base class of backend solver class,
+    use subclass to solve model within the XSO framework.
     """
 
     @abstractmethod
     def add_variable(self, label, initial_value, model):
+        """Method to reformat a variable object for use with solver,
+        should return storage object of value."""
         pass
 
     @abstractmethod
     def add_parameter(self, label, value):
+        """Method to reformat a parameter object for use with solver."""
         pass
 
     @abstractmethod
     def register_flux(self, label, flux, model, dims):
+        """Method to reformat a flux function for use with solver,
+        should return storage object of value."""
         pass
 
     @abstractmethod
     def add_forcing(self, label, flux, time):
+        """Method to reformat a forcing function for use with solver,
+        should return storage object of value."""
         pass
 
     @abstractmethod
     def assemble(self, model):
+        """Method to initialize model."""
         pass
 
     @abstractmethod
     def solve(self, model, time_step):
+        """Method to solve model, specific to solver chosen."""
         pass
 
     @abstractmethod
     def cleanup(self):
+        """Method to clean up temporary storage or perform other actions
+        after the model has been run."""
         pass
 
     class MathFunctionWrappers:
@@ -91,16 +100,22 @@ class SolverABC(ABC):
             return np.maximum(x1, x2)
 
 
-
 class ODEINTSolver(SolverABC):
-    """ Solver that can handle odeint solving of Model """
+    """Solver that can handle ODEINT solving of Model.
+
+    ODEINT is an adaptive step-size solver for ordinary differential equations,
+    included in the SciPy Python package.
+    """
 
     def __init__(self):
         self.var_init = defaultdict()
         self.flux_init = defaultdict()
 
-    def return_dims_and_array(self, value, model_time):
-        """ """
+    @staticmethod
+    def return_dims_and_array(value, model_time):
+        """Helper function to expand numpy array to appropriate size
+        for odeint solver based on value and model time.
+        """
         if np.size(value) == 1:
             _dims = None
             full_dims = (np.size(model_time),)
@@ -115,7 +130,7 @@ class ODEINTSolver(SolverABC):
         return array_out, _dims
 
     def add_variable(self, label, initial_value, model):
-        """ this returns storage container """
+        """Reformats variable to comply with solver and return storage array."""
 
         if model.time is None:
             raise Exception("To use ODEINT solver, model time needs to be supplied before adding variables")
@@ -130,11 +145,11 @@ class ODEINTSolver(SolverABC):
         return array_out
 
     def add_parameter(self, label, value):
-        """ """
+        """Returns parameter as numpy array."""
         return to_ndarray(value)
 
     def register_flux(self, label, flux, model, dims):
-        """ this returns storage container """
+        """Method to reformat flux function with appropriate inputs and to proper size."""
 
         if model.time is None:
             raise Exception("To use ODEINT solver, model time needs to be supplied before adding fluxes")
@@ -161,11 +176,11 @@ class ODEINTSolver(SolverABC):
         return array_out
 
     def add_forcing(self, label, forcing_func, model):
-        """ """
+        """Compute forcing for model time."""
         return forcing_func(model.time)
 
     def assemble(self, model):
-        """ """
+        """Define full model dimensions after initialization."""
 
         for var_key, dim in model.var_dims.items():
             model.full_model_dims[var_key] = dim
@@ -175,11 +190,13 @@ class ODEINTSolver(SolverABC):
 
         # TODO: diagnostic print here
         # print model repr for diagnostic purposes:
-        #print("Model is assembled:")
-        #print(model)
+        # print("Model is assembled:")
+        # print(model)
 
     def solve(self, model, time_step):
-        """ """
+        """Solve model using ODEINT, passing model_function, initial values and model.time.
+        The model output is then assigned to the previously initialized storage arrays within xsimlab backend.
+        """
 
         full_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()],
                                     [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
@@ -229,12 +246,15 @@ class ODEINTSolver(SolverABC):
                 val[...] = np.hstack((difference[0], difference))
 
     def cleanup(self):
-        """ """
+        """Empty cleanup method, not necessary for this solver."""
         pass
 
 
 class StepwiseSolver(SolverABC):
-    """ Solver that can handle stepwise calculation built into xarray-simlab framework """
+    """Solver that can handle stepwise calculation built into xsimlab framework.
+
+    Model output is computed step by step and assigned to the appropriate
+    storage arrays in xsimlab backend."""
 
     def __init__(self):
         self.model_time = 0
@@ -242,8 +262,11 @@ class StepwiseSolver(SolverABC):
 
         self.full_model_values = defaultdict()
 
-    def return_dims_and_array(self, value, model_time):
-        """ """
+    @staticmethod
+    def return_dims_and_array(value, model_time):
+        """Helper function to create arrays of appropriate size,
+        and assign initial value(s) to first index
+        """
 
         if np.size(value) == 1:
             _dims = None
@@ -264,18 +287,17 @@ class StepwiseSolver(SolverABC):
         return array_out, _dims
 
     def add_variable(self, label, initial_value, model):
-        """ """
+        """Method to reformat variable and return storage array."""
         array_out, _dims = self.return_dims_and_array(initial_value, model.time)
-
         model.var_dims[label] = _dims
-
         return array_out
 
     def add_parameter(self, label, value):
-        """ """
+        """Method to reformat parameter and return array."""
         return to_ndarray(value)
 
     def register_flux(self, label, flux, model, dims):
+        """Method to reformat flux function with appropriate inputs and to proper size."""
 
         var_in_dict = defaultdict()
         for var_key, value in model.variables.items():
@@ -311,12 +333,11 @@ class StepwiseSolver(SolverABC):
         return array_out
 
     def add_forcing(self, label, forcing_func, model):
-        """ """
+        """Compute forcing over model time and provide as array."""
         return forcing_func(model.time)
 
     def assemble(self, model):
-        # assemble dimensions now to separate and order fluxes and values correctly for unpacking (computed separately)
-
+        """Assemble full model dimension and order fluxes for proper unpacking."""
         for var_key, value in model.variables.items():
             _dims = model.var_dims[var_key]
             model.full_model_dims[var_key] = _dims
@@ -329,10 +350,12 @@ class StepwiseSolver(SolverABC):
 
         # TODO: diagnostic print here
         # finally print model repr for diagnostic purposes:
-        #print("Model is assembled:")
-        #print(model)
+        # print("Model is assembled:")
+        # print(model)
 
     def solve(self, model, time_step):
+        """Solve model in a stepwise fashion, calling this function at each time step."""
+
         self.model_time += time_step
         self.time_index += 1
 
@@ -353,6 +376,7 @@ class StepwiseSolver(SolverABC):
 
         state_out = model.model_function(flat_model_state, forcing=model_forcing)
 
+        # unpack flat state:
         state_dict = model.unpack_flat_state(state_out)
 
         for key, val in model.variables.items():
@@ -368,4 +392,5 @@ class StepwiseSolver(SolverABC):
                 val[self.time_index] = state_dict[key]
 
     def cleanup(self):
+        """Empty cleanup method, not necessary for this solver."""
         pass

@@ -18,15 +18,17 @@ def return_dim_ndarray(value):
 
 
 class Model:
-    """Base storage dictionary instationated once within Model
-    and filled with the specific model relevant values
+    """Base model class, containing dictionaries of all model variables and components,
+    as well as the function that sorts through all of these, and computes each step at model runtime.
+
+    It is instantiated once at model setup and filled with the specific variables
+    defined in components and their supplied labels and values.
+    The Model class is stored in the model backend and shared and written to by all components.
     """
 
     def __init__(self):
-        """Initializing the model class
-
-        sets up defaultdicts to store model variables flexibly,
-        before initializing them in Xarray-simlab backend
+        """Initializing defaultdicts to store model variables flexibly,
+        before initializing them in Xarray-simlab backend.
         """
         self.time = None
 
@@ -51,11 +53,13 @@ class Model:
                 f"Parameters:{[par for par in self.parameters]} \n"
                 f"Forcings:{[forc for forc in self.forcings]} \n"
                 f"Fluxes:{[flx for flx in self.fluxes]} \n"
-                f"Full Model Dimensions:{[(state,dim) for state,dim in self.full_model_dims.items()]} \n")
-
+                f"Full Model Dimensions:{[(state, dim) for state, dim in self.full_model_dims.items()]} \n")
 
     def unpack_flat_state(self, flat_state):
-        """ """
+        """Function called at the beginning of the model_function, to convert array
+        of model values into a labeled dictionary. This allows for easier calculations,
+        and ensures compatibility to most solving algorithms.
+        """
         state_dict = defaultdict()
         index = 0
         for key, dims in self.full_model_dims.items():
@@ -63,23 +67,31 @@ class Model:
                 state_dict[key] = flat_state[index]
                 index += 1
             elif isinstance(dims, int):
-                state_dict[key] = flat_state[index:index+dims]
+                state_dict[key] = flat_state[index:index + dims]
                 index += dims
             else:
                 _length = np.prod(dims)
-                state_dict[key] = flat_state[index:index+_length].reshape(dims)  # np.array( )
+                state_dict[key] = flat_state[index:index + _length].reshape(dims)
                 index += _length
         return state_dict
 
     def model_function(self, current_state, time=None, forcing=None):
-        """ general model function that matches fluxes to state variables
+        """ General model function that computes forcings and fluxes.
+        Is called within solve function of Solver.
 
-        :param current_state:
-        :param time: argument is necessary for odeint solve
-        :param forcing:
-        :return:
+        Parameters
+        __________
+        current_state : numpy array
+           Large array containing all current values for model.
+        time : numpy array or None
+            Can be passed explicitly for certain solvers, e.g. odeint solver
+            passes array of model time.
+        forcing : dict or None
+            Can be passed explicitly for certain solvers, e.g. stepwise solver
+            evaluates current time step value and passes that as dict.
         """
 
+        # unpack flat state:
         state = self.unpack_flat_state(current_state)
 
         # Return forcings for time point:
@@ -105,15 +117,12 @@ class Model:
         list_input_fluxes = defaultdict(list)
         for flux_var_dict in self.fluxes_per_var["list_input"]:
             flux_label, negative, list_input = flux_var_dict.values()
-
             flux_val = flux_values[flux_label]
             flux_dims = self.full_model_dims[flux_label]
-
             list_var_dims = []
             for var in list_input:
                 _dim = self.full_model_dims[var]
                 list_var_dims.append(_dim or 1)
-
             if len(list_input) == flux_dims:
                 for var, flux in zip(list_input, flux_val):
                     if negative:
@@ -123,7 +132,7 @@ class Model:
             elif sum(list_var_dims) == flux_dims:
                 _dim_counter = 0
                 for var, dims in zip(list_input, list_var_dims):
-                    flux = flux_val[_dim_counter:_dim_counter+dims]
+                    flux = flux_val[_dim_counter:_dim_counter + dims]
                     _dim_counter += dims
                     if negative:
                         list_input_fluxes[var].append(-flux)
@@ -167,8 +176,8 @@ class Model:
 
             state_out.append(np.sum(var_fluxes, axis=0))
 
+        # flatten state again:
         full_output = np.concatenate([[v for val in state_out for v in val.ravel()],
                                       [v for val in fluxes_out for v in val.ravel()]], axis=None)
 
         return full_output
-
