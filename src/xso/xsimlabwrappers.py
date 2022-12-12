@@ -6,17 +6,68 @@ from collections import defaultdict
 from xso.backendcomps import Backend, RunSolver, Time
 
 
-def create(model_dict):
-    """Function creates xsimlab Model instance,
-    automatically adding the necessary model backend, solver and time components"""
+def create(components):
+    """Creates xsimlab Model instance, from dict of XSO components,
+    automatically adding the necessary model backend, solver and time components.
 
-    model_dict.update({'Core': Backend, 'Solver': RunSolver, 'Time': Time})
-    return xs.Model(model_dict)
+    Parameters
+    ----------
+    components : dict
+        Dictionary with component names as keys and classes (decorated with
+        :func:`component`) as values.
+    """
+
+    components.update({'Core': Backend, 'Solver': RunSolver, 'Time': Time})
+    return xs.Model(components)
 
 
 def setup(solver, model, input_vars, output_vars=None, time=None):
-    """ This function wraps create_setup and adds a dummy clock parameter
-    necessary for model execution """
+    """Create a specific setup for model runs.
+
+    This function wraps xsimlab's create_setup and adds a dummy clock parameter
+    necessary for model execution. This convenient function creates a new
+    :class:`xarray.Dataset` object with everything needed to run a model
+    (i.e., input values, time steps, output variables to save at given times)
+    as data variables, coordinates and attributes.
+
+    Parameters
+    ----------
+    solver : :class:`xso.SolverABC` subclass
+        Solver backend to be used at model runtime.
+    model : :class:`xsimlab.Model`
+        Create a simulation setup for this model.
+    input_vars : dict, optional
+        Dictionary with values given for model inputs. Entries of the
+        dictionary may look like:
+        - ``'foo': {'bar': value, ...}`` or
+        - ``('foo', 'bar'): value`` or
+        - ``'foo__bar': value``
+        where ``foo`` is the name of a existing process in the model and
+        ``bar`` is the name of an (input) variable declared in that process.
+        Values are anything that can be easily converted to
+        :class:`xarray.Variable` objects, e.g., single values, array-like,
+        ``(dims, data, attrs)`` tuples or xarray objects.
+        For array-like values with no dimension labels, xarray-simlab will look
+        in ``model`` variables metadata for labels matching the number
+        of dimensions of those arrays.
+    output_vars : dict, optional
+        Dictionary with model variable names to save as simulation output.
+        Entries of the dictionary look similar than for ``input_vars``
+        (see here above), except that here ``value`` must correspond
+        to the dimension of a clock coordinate (i.e., new output values will
+        be saved at each time given by the coordinate labels) or
+        ``None`` (i.e., only one value will be saved at the end
+        of the simulation).
+
+    Returns
+    -------
+    dataset : :class:`xarray.Dataset`
+        A new Dataset object with model inputs as data variables or coordinates
+        (depending on their given value) and clock coordinates.
+        The names of the input variables also include the name of their process
+        (i.e., 'foo__bar').
+    """
+
     if time is None:
         raise Exception("Please supply (numpy) array of explicit timesteps to time keyword argument")
 
@@ -53,8 +104,27 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
 
 
 def update_setup(model, old_setup, new_solver, new_time=None):
-    """Change instantiated model setup to another solver type,
-    with the possibility to update solver time"""
+    """Change existing model setup to another solver type,
+    with the possibility to update solver time as well.
+
+    Provides a convenient wrapper for Xarray-simlab's :meth: `update_vars` and `update_clocks`.
+    Currently it supports switching between the 'stepwise' solver and 'odeint' adaptive
+    step-size solver.
+
+    Parameters
+    ----------
+    model : :class:`xsimlab.Model`
+        The model object that was used to create the model setup.
+    old_setup : :class:`xarray.Dataset`
+        The previous model setup Dataset, to be updated.
+    new_solver : :class:`xso.SolverABC` subclass
+        The new solver, that the model setup should be updated to be compatible with.
+
+    Returns
+    -------
+    new_setup : :class:`xarray.Dataset`
+        The new model setup Dataset, that is compatible to be run with the supplied solver.
+    """
 
     if new_time is None:
         time = old_setup.Time__time.values
@@ -65,11 +135,11 @@ def update_setup(model, old_setup, new_solver, new_time=None):
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
                                                                'Time__time': time})
-            setup2 = setup1.xsimlab.update_clocks(clocks={'clock': [time[0], time[1]]}, master_clock='clock')
+            new_setup = setup1.xsimlab.update_clocks(clocks={'clock': [time[0], time[1]]}, master_clock='clock')
     else:
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
                                                                'Time__time': time})  # ,
-            setup2 = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
+            new_setup = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
 
-    return setup2
+    return new_setup
