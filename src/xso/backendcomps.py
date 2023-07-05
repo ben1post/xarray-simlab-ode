@@ -132,6 +132,22 @@ class FourthInit(Context):
 
 
 @xs.process
+class FifthInit(Context):
+    """Inherits model backend from context and defines initializes stage,
+    given to init_stage argument in xso.component decorator.
+    """
+    firstinit = xs.group('FirstInit')
+    secondinit = xs.group('SecondInit')
+    thirdinit = xs.group('ThirdInit')
+    fourthinit = xs.group('FourthInit')
+    group = xs.variable(intent='out', groups='FifthInit')
+
+    def initialize(self):
+        super(FifthInit, self).initialize()
+        self.group = 5
+
+
+@xs.process
 class RunSolver(Context):
     """Inherits model backend from context and calls solver to run
     as final initialization stage of model runtime.
@@ -140,6 +156,7 @@ class RunSolver(Context):
     secondinit = xs.group('SecondInit')
     thirdinit = xs.group('ThirdInit')
     fourthinit = xs.group('FourthInit')
+    fifthinit = xs.group('FifthInit')
 
     def initialize(self):
         """After all other xso.components were initialized,

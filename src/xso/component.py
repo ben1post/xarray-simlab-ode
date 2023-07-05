@@ -3,13 +3,13 @@ import xsimlab as xs
 import attr
 from attr import fields_dict
 
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, Counter
 from functools import wraps
 import inspect
 import numpy as np
 
 from .variables import XSOVarType
-from xso.backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit
+from xso.backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
 
 
 def _create_variables_dict(process_cls):
@@ -55,7 +55,7 @@ def _convert_2_xsimlabvar(var, intent='in',
     xs.variable
         attr class handled by Xarray-simlab, the functional foundation of XSO
     """
-    print(type(var))
+    # get variable metadata
     var_description = var.metadata.get('description')
     if var_description:
         description_label = description_label + var_description
@@ -63,7 +63,7 @@ def _convert_2_xsimlabvar(var, intent='in',
     if var_dims is None:
         var_dims = var.metadata.get('dims')
 
-    #
+    # initialize dimensions, with time if value_store is true
     if value_store:
         if not var_dims:
             # if there is no dim supplied, we need 'time' as
@@ -95,6 +95,7 @@ def _convert_2_xsimlabvar(var, intent='in',
     else:
         var_attrs = {}
 
+    # return fully functional xarray-simlab variable
     return xs.variable(intent=intent, dims=var_dims, groups=groups,
                        description=description_label, attrs=var_attrs)
 
@@ -160,8 +161,9 @@ def _make_xso_flux(label, variable):
     group = variable.metadata.get('group')
     group_to_arg = variable.metadata.get('group_to_arg')
 
-    if group and group_to_arg:
-        raise Exception("A flux can be either added to group or take a group as argument, not both.")
+    # TODO: disabled for now, check against errors
+    #if group and group_to_arg:
+    #    raise Exception("A flux can be either added to group or take a group as argument, not both.")
 
     if group:
         xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(var=variable, intent='out', groups=group, var_dims=(),
@@ -210,26 +212,6 @@ def _create_forcing_dict(cls, var_dict):
                 forcings_dict[key] = getattr(cls, _forcing_setup_func)
 
     return forcings_dict
-
-
-def _create_new_cls(cls, cls_dict, init_stage):
-    """Method to initialize XSO component with appropriate parent class
-    from xso.backendcomps, which defines initialisation stage and
-    inherits from Context class.
-
-    ToDo: Make use of xsimlab's automatic ordering algorithm
-    """
-    if init_stage == "solver":
-        new_cls = type(cls.__name__, (FirstInit,), cls_dict)
-    elif init_stage == "forcing":
-        new_cls = type(cls.__name__, (SecondInit,), cls_dict)
-    elif init_stage == "variable":
-        new_cls = type(cls.__name__, (ThirdInit,), cls_dict)
-    elif init_stage == "flux":
-        new_cls = type(cls.__name__, (FourthInit,), cls_dict)
-    else:
-        raise Exception("Wrong init_stage supplied, needs to be 'solver', 'forcing', 'variable' or 'flux'")
-    return new_cls
 
 
 def _initialize_process_vars(cls, vars_dict):
@@ -363,7 +345,63 @@ def _initialize_forcings(cls, forcing_dict):
                 cls.core.add_forcing(label=forc_label, forcing_func=forc_func))
 
 
-def component(cls=None, *, init_stage="variable"):
+def _get_init_stage(vars_dict):
+    """Returns the initialization stage of the component
+    attempts to automatically determine init stage from implemented variable types and group arguments
+
+    :param vars_dict: dictionary of variables in component
+
+    :return: init stage
+    """
+
+    vars_list = []
+    groups = 0
+    groups_to_arg = 0
+
+    for key, var in vars_dict.items():
+        vars_list.append(var.metadata.get('var_type'))
+        if var.metadata.get('group'):
+            groups += 1
+        if var.metadata.get('group_to_arg'):
+            groups_to_arg += 1
+
+    # count number of variables of each type
+    count_vars = Counter(vars_list)
+
+    if groups_to_arg > 0:
+        init_stage_automated = "fifth"
+    elif count_vars[XSOVarType.FLUX] > 0:
+        init_stage_automated = "fourth"
+    elif count_vars[XSOVarType.FORCING] > 0:
+        init_stage_automated = "third"
+    else:
+        init_stage_automated = "second"
+
+    return init_stage_automated
+
+
+def _create_new_cls(cls, cls_dict, init_stage):
+    """Method to initialize XSO component with appropriate parent class
+    from xso.backendcomps, which defines initialisation stage and
+    inherits from Context class.
+    """
+
+    if init_stage == "first":
+        new_cls = type(cls.__name__, (FirstInit,), cls_dict)
+    elif init_stage == "second":
+        new_cls = type(cls.__name__, (SecondInit,), cls_dict)
+    elif init_stage == "third":
+        new_cls = type(cls.__name__, (ThirdInit,), cls_dict)
+    elif init_stage == "fourth":
+        new_cls = type(cls.__name__, (FourthInit,), cls_dict)
+    elif init_stage == "fifth":
+        new_cls = type(cls.__name__, (FifthInit,), cls_dict)
+    else:
+        raise Exception("There was an error with the sorting of processes. Please check your model.")
+    return new_cls
+
+
+def component(cls=None):
     """A component decorator that adds everything needed to use the class
     as a XSO component. It is a wrapper for the xarray-simlab process decorator.
 
@@ -371,7 +409,6 @@ def component(cls=None, *, init_stage="variable"):
 
     - A set of XSO variables, defined as class attributes, e.g. xso.variable, xso.parameter,
     xso.forcing or xso.flux.
-
     - One or more methods that can be functions defining a xso.flux or a xso.forcing.
 
     Parameters
@@ -381,6 +418,11 @@ def component(cls=None, *, init_stage="variable"):
     init_stage : str
         Allows setting explicit initialization stage. Currently this is necessary, because
         the XSO backend does not support automatic ordering yet.
+
+    Returns
+    _______
+    cls : class
+        The decorated class that is a fully functional xso.component.
     """
 
     def create_component(cls):
@@ -389,7 +431,10 @@ def component(cls=None, *, init_stage="variable"):
         vars_dict = _create_variables_dict(attr_cls)
         forcing_dict = _create_forcing_dict(cls, vars_dict)
 
-        new_cls = _create_new_cls(cls, _create_xsimlab_var_dict(vars_dict), init_stage)
+        # implement a basic automatic process ordering
+        init_stage_automated = _get_init_stage(vars_dict)
+
+        new_cls = _create_new_cls(cls, _create_xsimlab_var_dict(vars_dict), init_stage_automated)
 
         def flux_decorator(self, func):
             """XSO flux function decorator to unpack arguments"""

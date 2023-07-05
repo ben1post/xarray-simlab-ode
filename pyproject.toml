@@ -11,6 +11,7 @@ python = ">=3.9,<3.12"
 xarray-simlab = "^0.5.0"
 scipy = "^1.9.1"
 dask = {extras = ["distributed"], version = "^2022.10.0"}
+jupyter = "^1.0.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.3"
