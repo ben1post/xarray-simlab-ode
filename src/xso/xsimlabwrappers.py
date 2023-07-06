@@ -98,7 +98,7 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
     else:
         # stepwise solver uses defined time as xsimlab clock
         return xs.create_setup(model=model,
-                               clocks={'clock': time},
+                               clocks={'time': time},
                                input_vars=input_vars,
                                output_vars=output_vars)
 

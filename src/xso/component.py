@@ -26,7 +26,7 @@ def _convert_2_xsimlabvar(var, intent='in',
                           description_label='', attrs=True):
     """Converts XSO variables to xarray-simlab variables to be used in the model backend.
 
-    Function receives variable as attr in _make_phydra_variable function and extracts
+    Function receives variable as attr in _make_xsimlab_vars function and extracts
     description, dimensions and metadata, then passes it and additional arguments
     through xarray-simlab's xs.variable function.
 
@@ -112,17 +112,17 @@ def _make_xso_variable(label, variable):
             if var_dims is None:
                 raise ValueError("Variable with list_input=True requires passing dimension to dims keyword argument")
             xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, var_dims=var_dims,
-                                                       description_label='label reference / ')
+                                                       description_label='label list / ')
         else:
             xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, var_dims=(),
                                                        description_label='label reference / ')
     elif variable.metadata.get('foreign') is False:
         xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(var=variable, var_dims=(),
-                                                              description_label='label / ')
+                                                     description_label='label / ')
         xs_var_dict[label + '_init'] = _convert_2_xsimlabvar(var=variable, description_label='initial value / ')
-        xs_var_dict[label + '_value'] = _convert_2_xsimlabvar(var=variable, intent='out',
-                                                              value_store=True,
-                                                              description_label='output of variable value / ')
+        xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, intent='out',
+                                                     value_store=True,
+                                                     description_label='output of variable / ')
     return xs_var_dict
 
 
@@ -131,7 +131,7 @@ def _make_xso_parameter(label, variable):
     accordingly. Returns dict with label and xsimlab variable as key/value pairs.
     """
     xs_var_dict = defaultdict()
-    xs_var_dict[label] = _convert_2_xsimlabvar(var=variable)
+    xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, description_label='parameter / ')
     return xs_var_dict
 
 
@@ -160,10 +160,6 @@ def _make_xso_flux(label, variable):
                                                           description_label='output of flux value / ')
     group = variable.metadata.get('group')
     group_to_arg = variable.metadata.get('group_to_arg')
-
-    # TODO: disabled for now, check against errors
-    #if group and group_to_arg:
-    #    raise Exception("A flux can be either added to group or take a group as argument, not both.")
 
     if group:
         xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(var=variable, intent='out', groups=group, var_dims=(),
@@ -229,7 +225,7 @@ def _initialize_process_vars(cls, vars_dict):
             elif foreign is False:
                 _init = getattr(cls, key + '_init')
                 _label = getattr(cls, key + '_label')
-                setattr(cls, key + '_value', cls.core.add_variable(label=_label, initial_value=_init))
+                setattr(cls, key, cls.core.add_variable(label=_label, initial_value=_init)) # + '_value'
 
             flux_label = var.metadata.get('flux')
             flux_negative = var.metadata.get('negative')
@@ -245,8 +241,9 @@ def _initialize_process_vars(cls, vars_dict):
                             cls.core.add_flux(process_label=cls.label, var_label=_label, flux_label=_flx_label,
                                               negative=_flx_negative)
                 elif isinstance(flux_label, list) or isinstance(flux_negative, list):
-                    raise ValueError(f"Variable {_label} was assigned {flux_label} with negative arguments {flux_negative}, "
-                                     f"both need to be supplied as list")
+                    raise ValueError(
+                        f"Variable {_label} was assigned {flux_label} with negative arguments {flux_negative}, "
+                        f"both need to be supplied as list")
                 else:
                     if list_input:
                         cls.core.add_flux(process_label=cls.label, var_label="list_input", flux_label=flux_label,
@@ -259,7 +256,7 @@ def _initialize_process_vars(cls, vars_dict):
                 _par_value = getattr(cls, key)
                 cls.core.add_parameter(label=process_label + '_' + key, value=_par_value)
             else:
-                raise Exception("Currently Phydra does not support foreign=True for parameters -> TODO 4 v1")
+                raise Exception("Sorry, currently XSO does not support foreign=True for parameters.")
 
 
 def _create_flux_inputargs_dict(cls, vars_dict):
@@ -397,7 +394,7 @@ def _create_new_cls(cls, cls_dict, init_stage):
     elif init_stage == "fifth":
         new_cls = type(cls.__name__, (FifthInit,), cls_dict)
     else:
-        raise Exception("There was an error with the sorting of processes. Please check your model.")
+        raise Exception("There was an error with the sorting of processes. The automatic sorting failed.")
     return new_cls
 
 
@@ -415,9 +412,6 @@ def component(cls=None):
     __________
     cls : class, optional
         Allows applying this decorator either as @xso.component or @xso.component(*args).
-    init_stage : str
-        Allows setting explicit initialization stage. Currently this is necessary, because
-        the XSO backend does not support automatic ordering yet.
 
     Returns
     _______
