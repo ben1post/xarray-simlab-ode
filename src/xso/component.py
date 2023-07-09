@@ -384,7 +384,7 @@ def _initialize_forcings(cls, forcing_dict):
         setattr(cls, var + '_value',
                 cls.core.add_forcing(label=forc_label, forcing_func=forc_func))
 
-import pandas as pd
+
 def _initialize_indexes(cls, index_dict):
     """Initializes xso.index variables defined in xso.component decorated class."""
     for var, val in index_dict.items():

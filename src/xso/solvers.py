@@ -71,6 +71,9 @@ class SolverABC(ABC):
         Accessible within XSO components using self.m as defined in backendcomps.py class Backend.
          """
 
+        # Constants:
+        pi = np.pi  # pi constant
+
         def exp(x):
             """Exponential function"""
             return np.exp(x)
@@ -98,6 +101,14 @@ class SolverABC(ABC):
         def max(x1, x2):
             """ Maximum function """
             return np.maximum(x1, x2)
+
+        def abs(x):
+            """ Absolute value function """
+            return np.abs(x)
+
+        def sin(x):
+            """ Sine function """
+            return np.sin(x)
 
 
 class ODEINTSolver(SolverABC):

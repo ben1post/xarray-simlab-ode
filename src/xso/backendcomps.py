@@ -116,6 +116,7 @@ class ThirdInit(Context):
         super(ThirdInit, self).initialize()
         self.group = 3
 
+
 @xs.process
 class FourthInit(Context):
     """Inherits model backend from context and defines initializes stage,
@@ -178,7 +179,8 @@ class Time(FirstInit):
     """
 
     time_input = xs.variable(intent='in', dims='time',
-                       description='sequence of time for which to solve the model')
+                             description='sequence of time for which to solve the model')
+
     time = xs.index(dims='time')
 
     def initialize(self):
@@ -198,3 +200,38 @@ class Time(FirstInit):
         """
         dtdt = 1
         return dtdt
+
+
+def create_time_component(time_unit):
+    """Helper function to create a Time component with a custom unit registered through the backend."""
+
+    @xs.process
+    class Time(FirstInit):
+        """Process defining model time and registering it in model backend.
+        """
+
+        time_input = xs.variable(intent='in', dims='time',
+                                 description='sequence of time for which to solve the model')
+
+        time = xs.index(dims='time', attrs={'units': time_unit})
+
+        def initialize(self):
+            """Initializing Time process as fully functional XSO component."""
+            # super(Time, self).initialize()
+            self.label = self.__xsimlab_name__
+
+            self.core.model.time = self.time_input
+
+            self.time = self.core.add_variable('time')
+
+            self.core.register_flux(self.label + '_' + self.time_flux.__name__, self.time_flux)
+            self.core.add_flux(self.label, 'time', 'time_flux')
+
+        def time_flux(self, **kwargs):
+            """Simple linear flux, that represents time within model.
+            Necessary for external solvers like odeint.
+            """
+            dtdt = 1
+            return dtdt
+
+    return Time

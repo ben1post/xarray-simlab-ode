@@ -3,10 +3,10 @@ from xsimlab.variable import VarIntent
 
 from collections import defaultdict
 
-from xso.backendcomps import Backend, RunSolver, Time
+from xso.backendcomps import Backend, RunSolver, Time, create_time_component
 
 
-def create(components):
+def create(components, time_unit='d'):
     """Creates xsimlab Model instance, from dict of XSO components,
     automatically adding the necessary model backend, solver and time components.
 
@@ -17,7 +17,7 @@ def create(components):
         :func:`component`) as values.
     """
 
-    components.update({'Core': Backend, 'Solver': RunSolver, 'Time': Time})
+    components.update({'Core': Backend, 'Solver': RunSolver, 'Time': create_time_component(time_unit)})
     return xs.Model(components)
 
 
@@ -98,7 +98,7 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
     else:
         # stepwise solver uses defined time as xsimlab clock
         return xs.create_setup(model=model,
-                               clocks={'time': time},
+                               clocks={'time_input': time},
                                input_vars=input_vars,
                                output_vars=output_vars)
 
@@ -134,12 +134,12 @@ def update_setup(model, old_setup, new_solver, new_time=None):
     if new_solver != "stepwise":
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
-                                                               'Time__time': time})
+                                                               'Time__time_input': time})
             new_setup = setup1.xsimlab.update_clocks(clocks={'clock': [time[0], time[1]]}, master_clock='clock')
     else:
         with model:
             setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
-                                                               'Time__time': time})  # ,
+                                                               'Time__time_input': time})  # ,
             new_setup = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
 
     return new_setup
