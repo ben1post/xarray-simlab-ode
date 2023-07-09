@@ -118,11 +118,11 @@ def _make_xso_variable(label, variable):
                                                        description_label='label reference / ')
     elif variable.metadata.get('foreign') is False:
         xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(var=variable, var_dims=(),
-                                                     description_label='label / ')
+                                                              description_label='label / ')
         xs_var_dict[label + '_init'] = _convert_2_xsimlabvar(var=variable, description_label='initial value / ')
         xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, intent='out',
-                                                     value_store=True,
-                                                     description_label='output of variable / ')
+                                                   value_store=True,
+                                                   description_label='output of variable / ')
     return xs_var_dict
 
 
@@ -171,11 +171,42 @@ def _make_xso_flux(label, variable):
     return xs_var_dict
 
 
+def _make_xso_index(label, variable):
+    """Checks for type of variable defined and calls _convert_2_xsimlabvar function
+    accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+    """
+    xs_var_dict = defaultdict()
+
+    description_label = 'index / '
+    # get variable metadata
+    var_description = variable.metadata.get('description')
+    if var_description:
+        description_label = description_label + var_description
+
+    var_dims = variable.metadata.get('dims')
+
+    if var_dims is None:
+        raise ValueError("Argument dims is not supplied. Index variable requires passing the labels of dimension to 'dims' keyword.")
+
+    if label != var_dims:
+        raise ValueError("The variable name has to be the same as the dimension it labels. This is a requirement of xarray-simlab.")
+
+    if variable.metadata.get('attrs'):
+        var_attrs = variable.metadata.get('attrs')
+    else:
+        var_attrs = {}
+
+    xs_var_dict[label] = xs.index(dims=var_dims, description=description_label, attrs=var_attrs)
+    xs_var_dict[label + '_index'] = _convert_2_xsimlabvar(var=variable, description_label='index / ')
+    return xs_var_dict
+
+
 _make_xsimlab_vars = {
     XSOVarType.VARIABLE: _make_xso_variable,
     XSOVarType.FORCING: _make_xso_forcing,
     XSOVarType.PARAMETER: _make_xso_parameter,
     XSOVarType.FLUX: _make_xso_flux,
+    XSOVarType.INDEX: _make_xso_index,
 }
 
 
@@ -191,6 +222,7 @@ def _create_xsimlab_var_dict(cls_vars):
     for key, var in cls_vars.items():
         var_type = var.metadata.get('var_type')
         var_dict = _make_xsimlab_vars[var_type](key, var)
+
         for xs_key, xs_var in var_dict.items():
             xs_var_dict[xs_key] = xs_var
 
@@ -210,6 +242,17 @@ def _create_forcing_dict(cls, var_dict):
     return forcings_dict
 
 
+def _create_index_dict(cls, var_dict):
+    """Parses var_dict and extracts index setup function"""
+    index_dict = defaultdict()
+
+    for key, var in var_dict.items():
+        if var.metadata.get('var_type') is XSOVarType.INDEX:
+            index_dict[key] = var
+
+    return index_dict
+
+
 def _initialize_process_vars(cls, vars_dict):
     """Parses vars_dict of xso.component decorated class, and
     initializes defined variables and methods with model backend.
@@ -225,7 +268,7 @@ def _initialize_process_vars(cls, vars_dict):
             elif foreign is False:
                 _init = getattr(cls, key + '_init')
                 _label = getattr(cls, key + '_label')
-                setattr(cls, key, cls.core.add_variable(label=_label, initial_value=_init)) # + '_value'
+                setattr(cls, key, cls.core.add_variable(label=_label, initial_value=_init))  # + '_value'
 
             flux_label = var.metadata.get('flux')
             flux_negative = var.metadata.get('negative')
@@ -341,6 +384,15 @@ def _initialize_forcings(cls, forcing_dict):
         setattr(cls, var + '_value',
                 cls.core.add_forcing(label=forc_label, forcing_func=forc_func))
 
+import pandas as pd
+def _initialize_indexes(cls, index_dict):
+    """Initializes xso.index variables defined in xso.component decorated class."""
+    for var, val in index_dict.items():
+        # apply index value to XSO Index variable type
+        index_value = getattr(cls, var + '_index')
+        setattr(cls, var, index_value)
+
+
 
 def _get_init_stage(vars_dict):
     """Returns the initialization stage of the component
@@ -424,6 +476,7 @@ def component(cls=None):
         attr_cls = attr.attrs(cls, repr=False)
         vars_dict = _create_variables_dict(attr_cls)
         forcing_dict = _create_forcing_dict(cls, vars_dict)
+        index_dict = _create_index_dict(cls, vars_dict)
 
         # implement a basic automatic process ordering
         init_stage_automated = _get_init_stage(vars_dict)
@@ -482,6 +535,9 @@ def component(cls=None):
             _initialize_fluxes(self, vars_dict)
 
             _initialize_forcings(self, forcing_dict)
+
+            _initialize_indexes(self, index_dict)
+
 
         setattr(new_cls, 'flux_decorator', flux_decorator)
         setattr(new_cls, 'initialize', initialize)

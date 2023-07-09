@@ -72,7 +72,7 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
         raise Exception("Please supply (numpy) array of explicit timesteps to time keyword argument")
 
     input_vars.update({'Core__solver_type': solver,
-                       'Time__time': time})
+                       'Time__time_input': time})
 
     # convenient option "ALL" and providing set of values that automatically are returned with dim None:
     if output_vars == "ALL" or output_vars is None:

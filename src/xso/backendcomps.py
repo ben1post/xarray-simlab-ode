@@ -177,16 +177,17 @@ class Time(FirstInit):
     this process is included by default.
     """
 
-    time = xs.variable(intent='in', dims='input_time',
-                       description='sequence of time points for which to solve the model')
-    value = xs.variable(intent='out', dims='time')
+    time_input = xs.variable(intent='in', dims='time',
+                       description='sequence of time for which to solve the model')
+    time = xs.index(dims='time')
 
     def initialize(self):
         """Initializing Time process as fully functional XSO component."""
+        super(Time, self).initialize()
         self.label = self.__xsimlab_name__
-        self.core.model.time = self.time
+        self.core.model.time = self.time_input
 
-        self.value = self.core.add_variable('time')
+        self.time = self.core.add_variable('time')
 
         self.core.register_flux(self.label + '_' + self.time_flux.__name__, self.time_flux)
         self.core.add_flux(self.label, 'time', 'time_flux')

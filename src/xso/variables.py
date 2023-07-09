@@ -8,6 +8,7 @@ class XSOVarType(Enum):
     PARAMETER = "parameter"
     FORCING = "forcing"
     FLUX = "flux"
+    INDEX = "index"
 
 
 def variable(foreign=False, flux=None, negative=False, list_input=False,
@@ -201,3 +202,38 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
         return create_attrib(flux_func)
 
     return create_attrib
+
+
+def index(foreign=False, dims=(), description='', attrs=None):
+    """Create an index.
+
+    This has to be be a local index for the component.
+
+    The index can be of variable dimensionality.
+
+    Parameters
+    ----------
+    foreign : boolean, optional
+        Defines whether the parameter is initialized and labeled in the component,
+        or is simply a reference to a variable in another component.
+    dims : str or tuple or list, optional
+        Dimension label(s) of the forcing. An empty tuple
+        corresponds to a scalar variable (default), a string or a 1-length
+        tuple corresponds to a 1-d variable and a n-length tuple corresponds to
+        a n-d variable. A list of str or tuple items may also be provided if
+        the variable accepts different numbers of dimensions.
+    description : str, optional
+        Short description of the parameter.
+    attrs : dict, optional
+        Dictionnary of additional metadata (e.g., standard_name,
+        units, math_symbol...).
+    """
+    metadata = {
+        "var_type": XSOVarType.INDEX,
+        "foreign": foreign,
+        "dims": dims,
+        "attrs": attrs or {},
+        "description": description,
+    }
+
+    return attr.attrib(metadata=metadata)
