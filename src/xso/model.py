@@ -2,10 +2,6 @@ from collections import defaultdict
 
 import numpy as np
 
-from xso.solvers import ODEINTSolver, StepwiseSolver
-
-_built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
-
 
 def return_dim_ndarray(value):
     """Helper function to always have at least 1d numpy array returned."""
@@ -75,7 +71,7 @@ class Model:
                 index += _length
         return state_dict
 
-    def model_function(self, current_state, time=None, forcing=None):
+    def model_function(self, time=None, current_state=None, forcing=None):
         """ General model function that computes forcings and fluxes.
         Is called within solve function of Solver.
 

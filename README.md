@@ -20,12 +20,13 @@ import xso
 
 @xso.component
 class Variable:
-    var = xso.variable(description='basic state variable')
+    var = xso.variable(description='basic state variable', attrs={'units':'µM'})
 
 @xso.component
 class LinearGrowth:
     var_ext = xso.variable(foreign=True, flux='growth', description='external state variable')
-    rate = xso.parameter(description='linear growth rate')
+    rate = xso.parameter(description='linear growth rate', attrs={'units':'$d^{-1}$'})
+
     @xso.flux
     def growth(self, var_ext, rate):
         return var_ext * rate
@@ -33,18 +34,18 @@ class LinearGrowth:
 2. Create a new model just by providing a dictionary of model components:
 
 ```python
-model = xso.create({'Var':Variable,'Growth':LinearGrowth})
+model = xso.create({'Var':Variable,'Growth':LinearGrowth}, time_unit='d')
 ```
 3. Create an input xarray.Dataset, run the model and get an output xarray.Dataset:
 
 ```python
 import numpy as np
 
-input_ds = xso.setup(solver='stepwise',
+input_ds = xso.setup(solver='solve_ivp',
                      model=model,
-                     time=np.arange(1,10),
+                     time=np.arange(1,10,.1),
                      input_vars={
-                         'Var':{'var_label':'X', 'var_init':1},
+                         'Var':{'value_label':'X', 'value_init':1},
                          'Growth':{'var_ext':'X', 'rate':1.},
                      })
 

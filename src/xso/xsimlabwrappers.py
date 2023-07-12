@@ -15,13 +15,17 @@ def create(components, time_unit='d'):
     components : dict
         Dictionary with component names as keys and classes (decorated with
         :func:`component`) as values.
+    time_unit : str, optional
+        Unit of time to be used in the model. Default is 'd' for days. This has to be
+        supplied at model creation, since the time unit is written to the immutable
+        metadata of the model object.
     """
 
     components.update({'Core': Backend, 'Solver': RunSolver, 'Time': create_time_component(time_unit)})
     return xs.Model(components)
 
 
-def setup(solver, model, input_vars, output_vars=None, time=None):
+def setup(solver, model, input_vars, output_vars=None, time=None, solver_kwargs=None):
     """Create a specific setup for model runs.
 
     This function wraps xsimlab's create_setup and adds a dummy clock parameter
@@ -58,6 +62,10 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
         be saved at each time given by the coordinate labels) or
         ``None`` (i.e., only one value will be saved at the end
         of the simulation).
+    solver_kwargs : dict, optional
+        Additional keyword arguments to pass to the solver backend. This is
+        directly passed to the solving function and can be used to adjust parameters
+        for solver backends that allow this, such as the IVPSolver backend.
 
     Returns
     -------

@@ -231,7 +231,7 @@ def create_time_component(time_unit):
             """Simple linear flux, that represents time within model.
             Necessary for external solvers like odeint.
             """
-            dtdt = 1
+            dtdt = 1.
             return dtdt
 
     return Time

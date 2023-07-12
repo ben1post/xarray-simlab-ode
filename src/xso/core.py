@@ -1,9 +1,9 @@
 import time as tm
 
 from xso.model import Model
-from xso.solvers import SolverABC, ODEINTSolver, StepwiseSolver
+from xso.solvers import SolverABC, IVPSolver, StepwiseSolver
 
-_built_in_solvers = {'odeint': ODEINTSolver, 'stepwise': StepwiseSolver}
+_built_in_solvers = {'solve_ivp': IVPSolver, 'stepwise': StepwiseSolver}
 
 
 class XSOCore:
@@ -25,7 +25,7 @@ class XSOCore:
 
         Parameters
         ----------
-        solver : {'stepwise', 'odeint'} or subclass of SolverABC
+        solver : {'stepwise', 'solve_ivp'} or subclass of SolverABC
            Solver name as str, has to be built into xso.
            Alternatively can be passed a custom subclass of xso.solver.SolverABC.
         """
@@ -33,7 +33,10 @@ class XSOCore:
         self.solve_end = None
 
         if isinstance(solver, str):
-            self.solver = _built_in_solvers[solver]()
+            try:
+                self.solver = _built_in_solvers[solver]()
+            except KeyError:
+                raise KeyError("Solver name passed is not built-in. Please choose from: 'stepwise', 'solve_ivp'.")
         elif isinstance(solver, SolverABC):
             self.solver = solver
         else:

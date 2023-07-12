@@ -4,7 +4,7 @@ from collections import defaultdict
 import numpy as np
 import math
 
-from scipy.integrate import odeint
+from scipy.integrate import solve_ivp
 
 
 def to_ndarray(value):
@@ -111,11 +111,13 @@ class SolverABC(ABC):
             return np.sin(x)
 
 
-class ODEINTSolver(SolverABC):
-    """Solver that can handle ODEINT solving of Model.
+class IVPSolver(SolverABC):
+    """Solver backend using scipy.integrate.solve_ivp to solve model.
 
-    ODEINT is an adaptive step-size solver for ordinary differential equations,
+    SOLVE_IVP is a variable step-size solver for ordinary differential equations,
     included in the SciPy Python package.
+
+    By default, it utilizes an explicit Runge-Kutta method of order 5(4).
     """
 
     def __init__(self):
@@ -201,21 +203,27 @@ class ODEINTSolver(SolverABC):
 
         # TODO: diagnostic print here
         # print model repr for diagnostic purposes:
-        # print("Model is assembled:")
+        # print("Model is assembled!")
         # print(model)
 
     def solve(self, model, time_step):
-        """Solve model using ODEINT, passing model_function, initial values and model.time.
+        """Solve model using scipy.integrate.solve_ivp, passing model_function, initial values and model.time.
         The model output is then assigned to the previously initialized storage arrays within xsimlab backend.
         """
-
+        # convert all initial values to a 1D array:
         full_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()],
                                     [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
 
-        full_model_out = odeint(model.model_function, full_init, model.time)
+        # solving model here:
+        full_model_out = solve_ivp(model.model_function,
+                                   t_span=[model.time[0], model.time[-1]],
+                                   y0=full_init,
+                                   t_eval=model.time)
 
-        state_rows = [row for row in full_model_out.T]
+        # round off 1e150-th decimal to remove floating point numerical errors
+        state_rows = [row for row in np.around(full_model_out.y, decimals=150)]
 
+        # unpack and reshape state array to appropriate dimensions:
         state_dict = defaultdict()
         index = 0
         for key, dims in model.full_model_dims.items():
@@ -385,7 +393,7 @@ class StepwiseSolver(SolverABC):
         # flatten list for model function:
         flat_model_state = np.concatenate(model_state, axis=None)
 
-        state_out = model.model_function(flat_model_state, forcing=model_forcing)
+        state_out = model.model_function(current_state=flat_model_state, forcing=model_forcing)
 
         # unpack flat state:
         state_dict = model.unpack_flat_state(state_out)
