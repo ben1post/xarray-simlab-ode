@@ -1,29 +1,11 @@
-```{include} ../README.md
-```
+{!README.md!}
 
-**Getting Started**
+# Welcome to xarray-simlab-ode's documentation!
 
-* :doc:`about`
-* :doc:`faq`
-* :doc:`install`
-* :doc:`examples`
+## Getting started
 
-.. toctree::
-   :maxdepth: 1
-   :hidden:
-   :caption: Getting Started
+Check out the [install](install) section for how to get started with ```xso```.
 
-   about
-   faq
-   installing
-   examples
+!!! note
 
-```{toctree}
-:maxdepth: 1
-:hidden:
-
-example.ipynb
-changelog.md
-contributing.md
-autoapi/index
-```
+    This project is under active development.
