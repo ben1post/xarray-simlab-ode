@@ -1,11 +1,68 @@
-{!README.md!}
-
 # Welcome to xarray-simlab-ode's documentation!
 
-## Getting started
+Xarray-simlab-ode provides the `xso` framework for building and solving models based on ordinary differential 
+equations (ODEs), an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
 
-Check out the [install](install) section for how to get started with ```xso```.
+Xarray-simlab provides a generic framework for building computational models in a modular fashion 
+and a [xarray](http://xarray.pydata.org/) extension for setting and running simulations using xarray's `Dataset` 
+structure.
 
-!!! note
+Xarray-simlab-ode (XSO) extends the Xarray-simlab framework with a set of variables, processes and a solver backend, 
+suited towards ODE-based models. It is designed for flexible, interactive and reproducible modeling workflows.
 
-    This project is under active development.
+*Note: This project is in the early stages of development.*
+
+Check out the [about](about) section for how to get started with ```xso```.
+
+## Documentation table of contents
+
+
+```{toctree}
+---
+caption: Getting Started
+maxdepth: 1
+---
+
+about
+install
+
+```
+
+```{toctree}
+---
+caption: User Guide
+maxdepth: 1
+---
+
+workflow_variables_components
+workflow_models
+
+```
+
+
+```{toctree}
+---
+caption: Help & Reference
+maxdepth: 1
+---
+
+contributing
+citation
+changelog
+```
+
+## Get involved
+
+The package is in the early stages of development. Feedback from testing and contributions are very welcome. 
+See [GitHub Issues](https://github.com/ben1post/xarray-simlab-ode/issues) for existing issues, or raise your own.
+Code contributions can be made via Pull Requests on [GitHub](https://github.com/ben1post/xarray-simlab-ode).
+Check out the [contributing guidelines](contributing) for more information.
+
+## License
+
+xarray-simlab-ode was created by Benjamin Post. 
+It is licensed under the terms of the BSD 3-Clause license.
+
+## Credits
+
+Xarray-simlab-ode is an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab), created by Benoît Bovy.
