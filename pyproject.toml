@@ -1,18 +1,20 @@
 [tool.poetry]
 name = "xso"
-version = "0.0.2"
+version = "0.0.3"
 description = "Framework for building and solving ODE-based models, an extension of xarray-simlab"
 authors = ["Benjamin Post"]
 license = "BSD 3-Clause"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
+python = ">=3.5"
 xarray-simlab = "^0.5.0"
-scipy = "^1.9.1"
-dask = {extras = ["distributed"], version = "^2022.10.0"}
-numpy = "^1.25.1"
-tqdm = "^4.65.0"
+scipy = ">=1.9.1"
+dask = {extras = ["distributed"], version = ">=2022.10.0"}
+zarr = ">= 2.3.0"
+xarray = ">=0.10.0"
+numpy = "*"
+tqdm = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.3"

@@ -12,8 +12,6 @@ suited towards ODE-based models. It is designed for flexible, interactive and re
 
 *Note: This project is in the early stages of development.*
 
-Check out the [about](about) section for how to get started with ```xso```.
-
 ## Documentation table of contents
 
 

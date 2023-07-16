@@ -120,7 +120,11 @@ Data variables:
 
 ## Storing input & output
 
-The input and output of a model run is stored in an `xarray.Dataset`.
+The simulation input and output is stored in the `xarray.Dataset` structure.
+This structure already supports serialization and I/O to several file formats, 
+where [netCDF](https://www.unidata.ucar.edu/software/netcdf/) is the recommended format. 
+Please read Section [reading and writing files](http://xarray.pydata.org/en/stable/io.html) in xarray's docs, for 
+more information.
 
 
 ```python
