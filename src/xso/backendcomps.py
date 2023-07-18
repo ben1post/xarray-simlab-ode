@@ -1,5 +1,5 @@
 import xsimlab as xs
-from xso.core import XSOCore
+from .core import XSOCore
 
 
 @xs.process

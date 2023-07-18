@@ -9,7 +9,7 @@ import inspect
 import numpy as np
 
 from .variables import XSOVarType
-from xso.backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
+from .backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
 
 
 def _create_variables_dict(process_cls):
