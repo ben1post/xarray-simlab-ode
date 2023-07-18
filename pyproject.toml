@@ -7,7 +7,7 @@ license = "BSD 3-Clause"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.8"
+python = ">=3.8,<4.0"
 xarray-simlab = "^0.5.0"
 scipy = ">=1.9.1"
 dask = {extras = ["distributed"], version = ">=2022.10.0"}
