@@ -46,8 +46,11 @@ try:
     print(f"xsimlab: {xsimlab.__version__}, {xsimlab.__file__}")
 except ImportError:
     print("no xsimlab")
-
-import xso
+try:
+    import xso
+    print(f"xso: {xso.__version__}, {xso.__file__}")
+except ImportError:
+    print("no xso")
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
