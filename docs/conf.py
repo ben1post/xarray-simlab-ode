@@ -21,7 +21,10 @@ extensions = [
     "autoapi.extension",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
+    "sphinx.ext.mathjax",
     'sphinx_toolbox.decorators',
 ]
 autoapi_dirs = ["../src"]
