@@ -1,4 +1,4 @@
-# About xarray-simlab-ode
+# Quick start
 
 Xarray-simlab-ode provides the `xso` framework for building and solving models based on ordinary differential equations 
 (ODEs), an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
@@ -73,23 +73,20 @@ with model:
 
 ![plot](_static/GrowthRate_BatchOut.png)
 
-## Motivation
+## Why xarray-simlab-ode?
 
 Heavily borrowing in both function and design from [xarray-simlab](https://xarray-simlab.readthedocs.io/en/latest/), 
 xarray-simlab-ode (XSO) provides a framework for building and solving models based on ordinary differential 
 equations (ODEs). 
 
-It is designed for flexible, interactive and reproducible modeling workflows, where the model does 
-not get increasingly inflexible and difficult to reconfigure and maintain as it is developed. Additionally, XSO can 
-provide an integrated modeling environment within the Python scientific ecosystem, with direct compatibility to 
-tools for data analysis and visualization.
+It is designed for flexible, interactive and reproducible modeling workflows, where the model does not get 
+exponentially more difficult to reconfigure and maintain as it is developed. Model components and processes 
+should always be readily replaceable. 
+
+Utilizing [xarray](https://xarray.dev/) to handle all model data and metadata, XSO can provide an integrated 
+modeling environment within the Python scientific ecosystem, with direct compatibility to many powerful tools for 
+data analysis and visualization.
 
 The goal is to contribute to the ongoing efforts of developing more robust, transparent, and reproducible models, 
 moving away from monolithic and inflexible codes to a model development process that is inherently collaborative.
-
-Scientists working with computational models do not always build the models themselves. Often, scientists use 
-existing models and focus the work on parameterization and analysis of results obtained with model applications in 
-specific locations. A user can start working with models without detailed knowledge of the underlying framework and 
-learn the basic workflow before progressing to building custom models using the XSO framework. Additionally, more 
-advanced users can easily share custom _components_ or _model objects_ via the respective Python objects. 
 

@@ -10,6 +10,9 @@ def create(components, time_unit='d'):
     """Creates xsimlab Model instance, from dict of XSO components,
     automatically adding the necessary model backend, solver and time components.
 
+    It is a simple wrapper of the xsimlab Model constructor, and returns a fully functional
+    Xarray-simlab model object with the XSO core, Solver and Time components added.
+
     Parameters
     ----------
     components : dict
@@ -19,6 +22,11 @@ def create(components, time_unit='d'):
         Unit of time to be used in the model. Default is 'd' for days. This has to be
         supplied at model creation, since the time unit is written to the immutable
         metadata of the model object.
+
+    Returns
+    -------
+    model : :class:`xsimlab.Model`
+        Xarray-simlab model object with the XSO core, Solver and Time components added.
     """
 
     components.update({'Core': Backend, 'Solver': RunSolver, 'Time': create_time_component(time_unit)})

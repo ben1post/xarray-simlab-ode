@@ -51,8 +51,7 @@ Install from source
 
 To install xarray-simlab-ode from source 
 (i.e. the actively developed version on [GitHub](https://github.com/ben1post/xarray-simlab-ode)),
-be sure you have the required
-dependencies (numpy and xarray) installed first. You might consider
+be sure you have the required dependencies installed first. You might consider
 using conda to install them:
 
 ```console 
@@ -89,4 +88,6 @@ Import xarray-simlab-ode
 To make sure that xarray-simlab-ode is correctly installed, try to import
 it by running this line:
 
-    $ python -c "import xso"
+```console
+python -c "import xso"
+```

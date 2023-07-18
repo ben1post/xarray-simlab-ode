@@ -32,8 +32,9 @@ caption: User Guide
 maxdepth: 1
 ---
 
-workflow_variables_components
-workflow_models
+workflow1_framework
+workflow2_variables_components
+workflow3_models
 
 ```
 
@@ -44,6 +45,7 @@ caption: Help & Reference
 maxdepth: 1
 ---
 
+api
 contributing
 citation
 changelog
