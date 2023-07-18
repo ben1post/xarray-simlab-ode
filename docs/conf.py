@@ -13,43 +13,36 @@ author = u"Benjamin Post"
 # -- General configuration ---------------------------------------------------
 
 import sys
-import os
 
 print(f"python exec: {sys.executable}")
 print(f"sys.path: {sys.path}")
 try:
     import numpy
-
     print(f"numpy: {numpy.__version__}, {numpy.__file__}")
 except ImportError:
     print("no numpy")
 try:
     import attr
-
     print(f"attr: {attr.__version__}, {attr.__file__}")
 except ImportError:
     print("no attr")
 try:
     import xarray
-
     print(f"xarray: {xarray.__version__}, {xarray.__file__}")
 except ImportError:
     print("no xarray")
 try:
     import dask
-
     print(f"dask: {dask.__version__}, {dask.__file__}")
 except ImportError:
     print("no dask")
 try:
     import zarr
-
     print(f"zarr: {zarr.__version__}, {zarr.__file__}")
 except ImportError:
     print("no zarr")
 
 import xsimlab
-
 print(f"xsimlab: {xsimlab.__version__}, {xsimlab.__file__}")
 
 # Add any Sphinx extension module names here, as strings. They can be
@@ -68,7 +61,6 @@ extensions = [
     'sphinx_toolbox.decorators',
 ]
 autoapi_dirs = ["../src"]
-
 
 autosummary_generate = True
 
