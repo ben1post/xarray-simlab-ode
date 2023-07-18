@@ -47,15 +47,15 @@ Backend components
 .. autosummary::
     :toctree: _api_generated/
 
-    core.XSOCore
-    model.Model
-    solvers.SolverABC
-    solvers.IVPSolver
-    solvers.StepwiseSolver
-    backendcomps.Backend
-    backendcomps.Context
-    backendcomps.Time
-    backendcomps.RunSolver
+    xso.core.XSOCore
+    xso.model.Model
+    xso.solvers.SolverABC
+    xso.solvers.IVPSolver
+    xso.solvers.StepwiseSolver
+    xso.backendcomps.Backend
+    xso.backendcomps.Context
+    xso.backendcomps.Time
+    xso.backendcomps.RunSolver
 
 
 
