@@ -41,9 +41,13 @@ try:
     print(f"zarr: {zarr.__version__}, {zarr.__file__}")
 except ImportError:
     print("no zarr")
+try:
+    import xsimlab
+    print(f"xsimlab: {xsimlab.__version__}, {xsimlab.__file__}")
+except ImportError:
+    print("no xsimlab")
 
-import xsimlab
-print(f"xsimlab: {xsimlab.__version__}, {xsimlab.__file__}")
+import xso
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
