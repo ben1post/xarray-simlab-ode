@@ -64,6 +64,11 @@ Xarray-simlab
 
 Since XSO mostly wraps `xarray-simlab <https://xarray-simlab.readthedocs.io/en/latest/>`_, it can be helpful to also reference that API.
 
+* The :deco:`xso.component`decorator function returns a fully functional :deco:`xsimlab:xsimlab.process` class.
+* The :func:`xso.create` function returns a :class:`xsimlab:xsimlab.Model` instance.
+* The :func:`xso.setup` function is a light wrapper around :func:`xsimlab:xsimlab.create_setup`.
+* All *variable types* are represented in the model as :func:`xsimlab:xsimlab.variable` instances.
+
 We can access the xarray-simlab API through the ``xsimlab`` accessor of the created input and output xarray Datasets:
 
 .. code-block:: python
