@@ -3,17 +3,26 @@ Introduction to the framework
 
 The Xarray-simlab-ODE (``xso``) is a Python framework that allows users to construct and customize, in a modular fashion, models based on ordinary differential equations (ODEs). It is technically a wrapper around the modeling framework `xarray-simlab <https://xarray-simlab.readthedocs.io/en/latest/>`__, additionally providing a functional set of variables, processes and a solver backend for ODE-based models.
 
-It is a non-opinionated framework, i.e., it does not provide a fixed notion of how the model should be implemented, instead it attempts to remove the redundant boilerplate code, allowing a user to construct and work with ODE-based models.
+It is a non-opinionated framework, i.e., it does not provide a fixed notion of how the model should be structured, instead it attempts to remove the redundant boilerplate code, allowing a user to construct and work with ODE-based models.
 
-XSO was developed as the technical foundation of the `Phydra library <https://github.com/ben1post/phydra>`__, but is not limited to any particular domain and can be used to create ODE-based models of any type.
+XSO was developed as the technical foundation of the `Phydra library <https://github.com/ben1post/phydra>`__ for marine ecosystem modeling, but is not limited to any particular domain and can be used to create ODE-based models of any type.
 
 
 Building blocks
 ===============
 
-The XSO framework provides several *variable types*, which directly correspond to the basic mathematical components of models based on ordinary differential equations (e.g., state variables, parameters, forcing, and partial equations).
+The XSO framework is built around these concepts:
 
-Every aspect of the model needs to be defined at the level of *variable types*. Model *components* can be flexibly constructed from the provided set of *variable types* and wrap a logical component of the model as users see fit.
+* Model data (setup and output)
+* Model objects
+* Components
+* Variable types
+
+The XSO framework provides several *variable types*, which directly correspond to the basic terms of models based on ordinary differential equations, e.g., state variables, parameters, forcing, and mathematical terms (here called *fluxes*) building the system of equations.
+
+Every aspect of the model needs to be defined at the level of *variable types*. Model *components* can be flexibly constructed from the provided set of *variable types* and wrap a logical component of the model as users see fit. These components can then be modularly assembled to a *model object*, which defines the model structure.
+
+The *model object* is then used to create a *model setup* dataset, which contains all relevant information needed at runtime, such as the solver algorithm to be used, as well as time steps and model parameterization. With both the *model object* and the corresponding *model setup*, the model can be exectued. Output is returned as an Xarray dataset with all metadata, which can be easily stored and shared.
 
 State variables, forcing and parameters need to be initialized in one *component*, but can be referenced across the model (using the :code:`foreign=True` argument). The system of differential equations is constructed from the *fluxes* contained in the model *components* via the supplied labels at model setup.
 
@@ -37,7 +46,7 @@ These can be used to define variables in compact Python classes, to construct fu
 Components
 __________
 
-*Components* are the general building-blocks of a model that declare a subset of variables and define a specific set of mathematical functions computed for these variables during model runtime. More specifically, a *component* refers to a Python class containing *variable types* that is decorated with :deco:`xso.component`.
+*Components* are the general building-blocks of a model that declare a subset of variables and define a specific set of mathematical functions computed for these variables during model runtime. More specifically, a *component* refers to a Python class containing XSO *variable types* that is decorated with :deco:`xso.component`.
 
 For example, a *component* could define a specific nutrient uptake function, e.g. Monod-type phytoplankton growth on a single nutrient. The decorating function registers the *variable types* within the framework, reducing boilerplate code and creating fully functional model building blocks. *Components* can be reused within a model.
 

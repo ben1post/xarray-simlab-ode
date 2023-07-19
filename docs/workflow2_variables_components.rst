@@ -41,7 +41,7 @@ The XSO framework allows structuring a model into modular components. The specif
 Anatomy of a component
 ======================
 
-A :class:`xso.component` is essentially a wrapper around a :class:`xsimlab:xsimlab.process` class, the main building block of the Xarray-simlab framework. There is a lot of additional functionality provided by ``xso`` through the *variable types* and the :deco:`xso.component` decorator. The following sections will explain the anatomy of a component via examples.
+A :class:`xso.component` is essentially a wrapper around the :deco:`xsimlab:xsimlab.process` class decorator, represents a logical unit in a computational model. There is a lot of additional functionality provided by ``xso`` through the *variable types* and the :deco:`xso.component` decorator. The following sections will explain the anatomy of an XSO component via examples.
 
 Component defining a variable
 -----------------------------
@@ -126,7 +126,7 @@ One of the more powerful features is the dimensionality and vectorization functi
             return var_list * rate
 
 
-In this component, we define a single flux for multiple variables that are flowing out of the system. The ``list_input=True`` argument indicates that the variable labels can be supplied at *model setup* as a list. The XSO backend aggregates all labeled variables into an array, with the dimension label supplied via ``dims='flow_list'``. We need to make sure, that this dimension is also present in the ``dims`` argument of the :func:`xso.flux` decorator, so that the flux function knows how to handle the aggregated variables. The backend automatically routes the flux values to the appropriate variables, here as a negative function.
+In this component, we define a single flux for multiple variables that are flowing out of the system. The ``list_input=True`` argument indicates that the variable labels can be supplied at *model setup* as a list. The XSO backend aggregates all labeled variables into an array, with the dimension label supplied via ``dims='flow_list'``. We need to make sure, that this dimension is also present in the ``dims`` argument of the :deco:`xso.flux` decorator, so that the flux function knows how to handle the aggregated variables. The backend automatically routes the flux values to the appropriate variables, here as a negative function.
 
 This allows for highly flexible complex model setups, as we can easily remove and add state variables, without overcomplicating our model structure.
 

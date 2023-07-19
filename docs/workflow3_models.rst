@@ -65,7 +65,7 @@ As can be seen from the ``__repr__`` of the model object, there are two perhaps 
 #.   The number of variables does not exactly correspond to the number of variable types in the model. Each :func:`xso.variable` initialized within a *component* requires two input arguments. E.g., for the ``value`` variable, it is  ``value_label`` and ``value_init``. The ``value_label`` is the label of the variable, and the ``value_init`` is the initial value of the variable. The label supplied here can be used to reference the variable in another component within the same model (where the input parameter is a ``label reference``).
 #. There are three model processes automatically added to the model object. These are the ``Solver``, ``Core`` and ``Time`` components provided by :mod:`xso.backendcomps`, that allow the model system to be setup and solved.
 
-In order to setup the model with a custom unit for time (e.g. per month, per year) this can be supplied to the :func:`xso.create` function as the ``time_unit`` argument. The ``time_unit`` argument is a string that can be parsed by the :func:`pint:pint.Unit` function. The default unit for time is ``'d'`` for days.
+In order to setup the model with a custom unit for time (e.g. per month, per year) this can be supplied to the :func:`xso.create` function as the ``time_unit`` argument. The default unit for time is ``'d'`` for days.
 
 Setup a model
 =============
@@ -98,7 +98,7 @@ A model is setup by calling the :func:`xso.setup` function. The :func:`xso.setup
                 })
 
 
-The :func:`xso.setup` function returns an :class:`xarray:Dataset` with the input variables and model components as data variables.
+The :func:`xso.setup` function returns an :class:`xarray:xarray.Dataset` with the input variables and model components as data variables.
 
 ..  code-block:: python
 
