@@ -51,7 +51,7 @@ except ImportError:
     print("no xsimlab")
 try:
     import xso
-    print(f"xso: {xso.__version__}, {xso.__file__}")
+    #print(f"xso: {xso.__version__}, {xso.__file__}")
 except ImportError:
     print("no xso")
 
