@@ -15,7 +15,7 @@ author = u"Benjamin Post"
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath('..'))
+sys.path.insert(0, os.path.abspath('../src'))
 
 print(f"python exec: {sys.executable}")
 print(f"sys.path: {sys.path}")
@@ -60,8 +60,8 @@ except ImportError:
 # ones.
 
 extensions = [
-    "myst_nb",
     "autoapi.extension",
+    "myst_nb",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.autodoc",
