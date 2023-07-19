@@ -16,7 +16,7 @@ suited towards ODE-based models. It is designed for flexible, interactive and re
 Documentation table of contents
 ===============================
 
-** Getting Started **
+**Getting Started**
 
 * :doc:`about`
 * :doc:`install`
@@ -29,7 +29,7 @@ Documentation table of contents
     about
     install
 
-** User Guide **
+**User Guide**
 
 * :doc:`workflow1_framework`
 * :doc:`workflow2_variables_components`
@@ -45,7 +45,8 @@ Documentation table of contents
     workflow3_models
 
 
-** Help & Reference **
+**Help & Reference**
+
 * :doc:`api`
 * :doc:`contributing`
 * :doc:`citation`
