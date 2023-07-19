@@ -7,6 +7,10 @@ build:
   tools: {python: "3.8"}
   jobs:
     pre_create_environment:
+      - asdf install python 3.8.5
+      - asdf global python 3.8.5
+      - python -m pip install --upgrade --no-cache-dir virtualenv
+
       - asdf plugin add poetry
       - asdf install poetry latest
       - asdf global poetry latest
