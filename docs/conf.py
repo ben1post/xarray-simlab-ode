@@ -13,6 +13,9 @@ author = u"Benjamin Post"
 # -- General configuration ---------------------------------------------------
 
 import sys
+import os
+
+sys.path.insert(0, os.path.abspath('..'))
 
 print(f"python exec: {sys.executable}")
 print(f"sys.path: {sys.path}")
