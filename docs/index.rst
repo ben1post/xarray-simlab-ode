@@ -68,8 +68,8 @@ Get involved
 ============
 
 The package is in the early stages of development. Feedback from testing and contributions are very welcome. 
-See [GitHub Issues](https://github.com/ben1post/xarray-simlab-ode/issues) for existing issues, or raise your own.
-Code contributions can be made via Pull Requests on [GitHub](https://github.com/ben1post/xarray-simlab-ode).
+See `GitHub Issues <https://github.com/ben1post/xarray-simlab-ode/issues>`__ for existing issues, or raise your own.
+Code contributions can be made via Pull Requests on `GitHub <https://github.com/ben1post/xarray-simlab-ode>`__.
 Check out the [contributing guidelines](contributing) for more information.
 
 License
@@ -81,4 +81,4 @@ It is licensed open source under the terms of the BSD 3-Clause license.
 Credits
 =======
 
-Xarray-simlab-ode is an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab), created by Benoît Bovy.
+Xarray-simlab-ode is an extension of `xarray-simlab <https://github.com/xarray-contrib/xarray-simlab>`__, created by Benoît Bovy.
