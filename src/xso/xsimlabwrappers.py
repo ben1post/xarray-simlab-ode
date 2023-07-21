@@ -33,7 +33,7 @@ def create(components, time_unit='d'):
     return xs.Model(components)
 
 
-def setup(solver, model, input_vars, output_vars=None, time=None, solver_kwargs=None):
+def setup(solver, model, input_vars, output_vars=None, time=None):
     """Create a specific setup for model runs.
 
     This function wraps xsimlab's create_setup and adds a dummy clock parameter

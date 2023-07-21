@@ -73,11 +73,14 @@ class SolverABC(ABC):
 
         # Constants:
         pi = np.pi  # pi constant
+        e = np.e  # e constant
 
         def exp(x):
             """Exponential function"""
             return np.exp(x)
 
+        # add np.errstate to ignore superfluous warnings, caused by solve_ivp solver
+        @np.errstate(all='ignore')
         def sqrt(x):
             """Square root function"""
             return np.sqrt(x)

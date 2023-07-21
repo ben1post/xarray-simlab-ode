@@ -198,7 +198,7 @@ class Time(FirstInit):
         """Simple linear flux, that represents time within model.
         Necessary for external solvers like odeint.
         """
-        dtdt = 1
+        dtdt = 1.
         return dtdt
 
 
