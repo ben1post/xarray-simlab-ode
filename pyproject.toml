@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "xso"
-version = "0.0.4"
+version = "0.1.0"
 description = "Framework for building and solving ODE-based models, an extension of xarray-simlab"
 authors = ["Benjamin Post"]
 license = "BSD 3-Clause"
