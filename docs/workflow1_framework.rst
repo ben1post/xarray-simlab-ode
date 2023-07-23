@@ -11,20 +11,23 @@ XSO was developed as the technical foundation of the `Phydra library <https://gi
 Building blocks
 ===============
 
-The XSO framework is built around these concepts:
+The XSO framework is built around the following concepts:
 
 * Model data (setup and output)
 * Model objects
 * Components
 * Variable types
 
-The XSO framework provides several *variable types*, which directly correspond to the basic terms of models based on ordinary differential equations, e.g., state variables, parameters, forcing, and mathematical terms (here called *fluxes*) building the system of equations.
+The XSO framework provides several *variable types*, which directly correspond state variables, parameters, forcing, and mathematical terms (here called *fluxes*), that together build the system of equations.
 
-Every aspect of the model needs to be defined at the level of *variable types*. Model *components* can be flexibly constructed from the provided set of *variable types* and wrap a logical component of the model as users see fit. These components can then be modularly assembled to a *model object*, which defines the model structure.
+Model *components* can be constructed as compact Python classes from the provided set of *variable types* and wrap a logical component of the model as the user sees fit.
 
-The *model object* is then used to create a *model setup* dataset, which contains all relevant information needed at runtime, such as the solver algorithm to be used, as well as time steps and model parameterization. With both the *model object* and the corresponding *model setup*, the model can be exectued. Output is returned as an Xarray dataset with all metadata, which can be easily stored and shared.
+One or more of these *components* can then be assembled to a *model object*, which defines the model structure. Components can interact with each other via the *variable types* and the labels supplied at *model setup*.
 
-State variables, forcing and parameters need to be initialized in one *component*, but can be referenced across the model (using the :code:`foreign=True` argument). The system of differential equations is constructed from the *fluxes* contained in the model *components* via the supplied labels at model setup.
+The *model setup* dataset contains all relevant information needed at runtime, such as the solver algorithm to be used, as well as time steps and model parameterization. State variables, forcing and parameters need to be initialized in one *component*, but can be referenced across the model (using the :code:`foreign=True` argument). The system of differential equations is constructed from the *fluxes* contained in the model *components* via the supplied labels at model setup.
+
+With both the *model object* and the corresponding *model setup*, the model can be executed. Both *model setup* and the output is returned as an Xarray dataset with all metadata, which can be easily stored and shared.
+
 
 Variable types
 ______________
