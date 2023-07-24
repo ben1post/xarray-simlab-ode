@@ -9,7 +9,7 @@ The `xso` framework for building and solving models based on ordinary differenti
 
 Xarray-simlab provides a generic framework for building computational models in a modular fashion and an [xarray](http://xarray.pydata.org/) extension for setting and running simulations using xarray's `Dataset` structure.
 
-Xarray-simlab-ode (XSO) extends the framework with a set of variables, processes and a solver backend, suited towards ODE-based models. It is designed for flexible, interactive and reproducible modeling workflows.
+Xarray-simlab-ode (XSO) extends the framework with a set of variables, processes and a solver backend, suited towards ODE-based models. It is designed for flexible, interactive and reproducible modeling workflows. XSO was developed as the foundation of the [Phydra library](https://github.com/ben1post/phydra) for plankton community models.
 
 ## Installation
 
