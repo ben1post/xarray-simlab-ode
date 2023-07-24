@@ -1,6 +1,8 @@
 # xarray-simlab-ode
 
-![PyPI](https://img.shields.io/pypi/v/xso) [![Documentation Status](https://readthedocs.org/projects/xarray-simlab-ode/badge/?version=latest)](https://xarray-simlab-ode.readthedocs.io/en/latest/?badge=latest)
+![PyPI](https://img.shields.io/pypi/v/xso) [![Documentation Status](https://readthedocs.org/projects/xarray-simlab-ode/badge/?version=latest)](https://xarray-simlab-ode.readthedocs.io/en/latest/?badge=latest) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8178616.svg)](https://doi.org/10.5281/zenodo.8178616)
+
+
 
 
 The `xso` framework for building and solving models based on ordinary differential equations (ODEs), an extension of [xarray-simlab](https://github.com/xarray-contrib/xarray-simlab).
