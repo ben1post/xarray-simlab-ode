@@ -207,7 +207,7 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
 def index(foreign=False, dims=(), description='', attrs=None):
     """Create an index.
 
-    This has to be be a local index for the component.
+    This has to be a local index for the component.
 
     The index can be of variable dimensionality.
 

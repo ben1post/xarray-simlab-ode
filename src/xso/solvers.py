@@ -149,7 +149,7 @@ class IVPSolver(SolverABC):
         """Reformats variable to comply with solver and return storage array."""
 
         if model.time is None:
-            raise Exception("To use ODEINT solver, model time needs to be supplied before adding variables")
+            raise Exception("To use IVPSolver, model time needs to be supplied before adding variables")
 
         # store initial values of variables to pass to odeint function
         self.var_init[label] = to_ndarray(initial_value)
@@ -204,10 +204,10 @@ class IVPSolver(SolverABC):
         for flx_key, dim in model.flux_dims.items():
             model.full_model_dims[flx_key] = dim
 
-        # TODO: diagnostic print here
+        # TODO: conditional diagnostic print here
         # print model repr for diagnostic purposes:
-        # print("Model is assembled!")
-        # print(model)
+        #print("Model is assembled!")
+        #print(model)
 
     def solve(self, model, time_step):
         """Solve model using scipy.integrate.solve_ivp, passing model_function, initial values and model.time.
@@ -216,6 +216,7 @@ class IVPSolver(SolverABC):
         # convert all initial values to a 1D array:
         full_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()],
                                     [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
+
 
         # solving model here:
         full_model_out = solve_ivp(model.model_function,
@@ -266,6 +267,8 @@ class IVPSolver(SolverABC):
                     val[...] = np.hstack((difference[..., 0][:, None], difference))
             else:
                 val[...] = np.hstack((difference[0], difference))
+
+
 
     def cleanup(self):
         """Empty cleanup method, not necessary for this solver."""
