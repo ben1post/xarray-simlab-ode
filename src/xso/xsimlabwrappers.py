@@ -124,7 +124,7 @@ def update_setup(model, old_setup, new_solver, new_time=None):
     with the possibility to update solver time as well.
 
     Provides a convenient wrapper for Xarray-simlab's :meth: `update_vars` and `update_clocks`.
-    Currently it supports switching between the 'stepwise' solver and 'odeint' adaptive
+    Currently, it supports switching between the 'stepwise' solver and 'odeint' adaptive
     step-size solver.
 
     Parameters
@@ -159,3 +159,4 @@ def update_setup(model, old_setup, new_solver, new_time=None):
             new_setup = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
 
     return new_setup
+

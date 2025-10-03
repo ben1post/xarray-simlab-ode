@@ -217,15 +217,48 @@ class IVPSolver(SolverABC):
         full_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()],
                                     [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
 
+        def instability_event(t, y):
+            if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+                return 0  # Trigger event
+            if np.any(y < 0) or np.any(y > 1e50):  # Arbitrary upper bound
+                return 0
+            return 1  # No event
+
+        instability_event.terminal = True
+        instability_event.direction = 0
+
 
         # solving model here:
         full_model_out = solve_ivp(model.model_function,
                                    t_span=[model.time[0], model.time[-1]],
                                    y0=full_init,
-                                   t_eval=model.time)
+                                   t_eval=model.time, events=instability_event)
+
+        if full_model_out.t_events[0].size > 0:
+            print("Event triggered at t =", full_model_out.t_events[0])
+        else:
+            print("No event detected")
+
+        # expected number of time steps:
+        n_expected_timesteps = len(model.time)
+        n_actual_timesteps = full_model_out.y.shape[1]
+
+        # pad solution with NaNs if model stopped early
+        if n_actual_timesteps < n_expected_timesteps:
+            n_missing = n_expected_timesteps - n_actual_timesteps
+            # create a nan array of same row shape, but fewer columns
+            nan_padding = np.full((full_model_out.y.shape[0], n_missing), np.nan)
+            padded_y = np.concatenate([full_model_out.y, nan_padding], axis=1)
+            # make sure time is monotonically increasing to have coherent xarray output
+            padded_y[0, :] = model.time
+        else:
+            padded_y = full_model_out.y  # no padding needed
+
+        # round off to remove floating-point noise
+        state_rows = [row for row in np.around(padded_y, decimals=150)]
 
         # round off 1e150-th decimal to remove floating point numerical errors
-        state_rows = [row for row in np.around(full_model_out.y, decimals=150)]
+        #state_rows = [row for row in np.around(full_model_out.y, decimals=150)]
 
         # unpack and reshape state array to appropriate dimensions:
         state_dict = defaultdict()
@@ -419,3 +452,4 @@ class StepwiseSolver(SolverABC):
     def cleanup(self):
         """Empty cleanup method, not necessary for this solver."""
         pass
+
