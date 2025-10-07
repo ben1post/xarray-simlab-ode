@@ -5,6 +5,7 @@ import numpy as np
 import math
 
 from scipy.integrate import solve_ivp
+from scipy.optimize import fsolve
 
 
 def to_ndarray(value):
@@ -206,8 +207,8 @@ class IVPSolver(SolverABC):
 
         # TODO: conditional diagnostic print here
         # print model repr for diagnostic purposes:
-        #print("Model is assembled!")
-        #print(model)
+        # print("Model is assembled!")
+        # print(model)
 
     def solve(self, model, time_step):
         """Solve model using scipy.integrate.solve_ivp, passing model_function, initial values and model.time.
@@ -220,13 +221,12 @@ class IVPSolver(SolverABC):
         def instability_event(t, y):
             if np.any(np.isnan(y)) or np.any(np.isinf(y)):
                 return 0  # Trigger event
-            if np.any(y < 0) or np.any(y > 1e50):  # Arbitrary upper bound
+            if np.any(y < -1e-6) or np.any(y > 1e50):  # Arbitrary upper bound
                 return 0
             return 1  # No event
 
         instability_event.terminal = True
         instability_event.direction = 0
-
 
         # solving model here:
         full_model_out = solve_ivp(model.model_function,
@@ -258,7 +258,7 @@ class IVPSolver(SolverABC):
         state_rows = [row for row in np.around(padded_y, decimals=150)]
 
         # round off 1e150-th decimal to remove floating point numerical errors
-        #state_rows = [row for row in np.around(full_model_out.y, decimals=150)]
+        # state_rows = [row for row in np.around(full_model_out.y, decimals=150)]
 
         # unpack and reshape state array to appropriate dimensions:
         state_dict = defaultdict()
@@ -301,7 +301,171 @@ class IVPSolver(SolverABC):
             else:
                 val[...] = np.hstack((difference[0], difference))
 
+    def cleanup(self):
+        """Empty cleanup method, not necessary for this solver."""
+        pass
 
+
+class FSolver(SolverABC):
+    """Solver backend using scipy.integrate.fsolve to solve model steady states.
+
+    SOLVE_IVP is a variable step-size solver for ordinary differential equations,
+    included in the SciPy Python package.
+
+    By default, it utilizes an explicit Runge-Kutta method of order 5(4).
+    """
+
+    def __init__(self):
+        self.var_init = defaultdict()
+        self.flux_init = defaultdict()
+
+    @staticmethod
+    def return_dims_and_array(value, model_time):
+        """Helper function to expand numpy array to appropriate size
+        for odeint solver based on value and model time.
+        """
+        if np.size(value) == 1:
+            _dims = None
+            full_dims = (np.size(model_time),)
+        elif len(np.shape(value)) == 1:
+            _dims = np.size(value)
+            full_dims = (_dims, np.size(model_time))
+        else:
+            _dims = np.shape(value)
+            full_dims = (*_dims, np.size(model_time))
+
+        array_out = np.zeros(full_dims)
+        return array_out, _dims
+
+    def add_variable(self, label, initial_value, model):
+        """Reformats variable to comply with solver and return storage array."""
+
+        if model.time is None:
+            raise Exception("To use IVPSolver, model time needs to be supplied before adding variables")
+
+        # store initial values of variables to pass to odeint function
+        self.var_init[label] = to_ndarray(initial_value)
+
+        array_out, dims = self.return_dims_and_array(initial_value, model.time)
+
+        model.var_dims[label] = dims
+
+        return array_out
+
+    def add_parameter(self, label, value):
+        """Returns parameter as numpy array."""
+        return to_ndarray(value)
+
+    def register_flux(self, label, flux, model, dims):
+        """Method to reformat flux function with appropriate inputs and to proper size."""
+
+        if model.time is None:
+            raise Exception("To use ODEINT solver, model time needs to be supplied before adding fluxes")
+
+        var_in_dict = defaultdict()
+        for var, value in model.variables.items():
+            var_in_dict[var] = self.var_init[var]
+        for var, value in self.flux_init.items():
+            var_in_dict[var] = value
+
+        forcing_init = defaultdict()
+        for key, func in model.forcing_func.items():
+            forcing_init[key] = func(0)
+
+        _flux_value = to_ndarray(flux(state=var_in_dict,
+                                      parameters=model.parameters,
+                                      forcings=forcing_init))
+        self.flux_init[label] = _flux_value
+
+        array_out, dims = self.return_dims_and_array(_flux_value, model.time)
+
+        model.flux_dims[label] = dims
+
+        return array_out
+
+    def add_forcing(self, label, forcing_func, model):
+        """Compute forcing for model time."""
+        return forcing_func(model.time)
+
+    def assemble(self, model):
+        """Define full model dimensions after initialization."""
+
+        for var_key, dim in model.var_dims.items():
+            model.full_model_dims[var_key] = dim
+
+        for flx_key, dim in model.flux_dims.items():
+            model.full_model_dims[flx_key] = dim
+
+        # TODO: conditional diagnostic print here
+        # print model repr for diagnostic purposes:
+        # print("Model is assembled!")
+        # print(model)
+
+    def solve(self, model, time_step):
+        """Solve for steady state (dy/dt = 0) using scipy.optimize.fsolve."""
+
+        # Flatten initial values into a 1D vector
+        state_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()]], axis=None)
+        print("InitState", state_init)
+
+        # fsolve expects a function of y -> dy/dt, so we wrap model_function properly
+        def rhs_steady(y):
+            full_init = np.concatenate([y, [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
+            return model.model_function(time=0, current_state=full_init, only_return_state=True)
+
+        # Solve for steady state
+        y_steady, info, ier, msg = fsolve(rhs_steady, state_init, full_output=True)
+
+        if ier != 1:
+            print(f"[WARNING] fsolve did not converge: {msg}")
+            print("YSTEADY", y_steady)
+            y_steady[:] = np.nan
+        else:
+            print("[INFO] Steady state found with residual norm:",
+                  np.linalg.norm(rhs_steady(y_steady)))
+            print("Residuals:", info['fvec'])  # Should be close to 0
+            print("YSTEADY", y_steady)
+
+        # Broadcast steady-state solution across time steps
+        n_time = len(model.time)
+
+        state_rows = [np.array([init, final]) for init, final in zip(state_init, y_steady)]
+
+        # Unpack only state variables
+        state_dict = defaultdict()
+        index = 0
+        for key in model.variables.keys():
+            dims = model.full_model_dims[key]
+            if dims is None:
+                state_dict[key] = state_rows[index]
+                index += 1
+            elif isinstance(dims, int):
+                val_list = []
+                for _ in range(dims):
+                    val_list.append(state_rows[index])
+                    index += 1
+                state_dict[key] = np.array(val_list)
+            else:
+                full_dims = (*dims, n_time)
+                n_flat = int(np.prod(dims))
+                val_list = []
+                for _ in range(n_flat):
+                    val_list.append(state_rows[index])
+                    index += 1
+                state_dict[key] = np.array(val_list).reshape(full_dims)
+
+        # Assign variables to model storage
+        for var_key, val in model.variables.items():
+            val[...] = state_dict[var_key]
+
+        # Optionally set fluxes to zeros
+        for flux_key, val in model.flux_values.items():
+            dims = model.full_model_dims[flux_key]
+            if dims:
+                shape = (dims, n_time) if isinstance(dims, int) else (*dims, n_time)
+                val[...] = np.zeros(shape)
+            else:
+                val[...] = np.zeros(n_time)
 
     def cleanup(self):
         """Empty cleanup method, not necessary for this solver."""
@@ -452,4 +616,3 @@ class StepwiseSolver(SolverABC):
     def cleanup(self):
         """Empty cleanup method, not necessary for this solver."""
         pass
-

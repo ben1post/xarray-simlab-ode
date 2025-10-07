@@ -1,9 +1,9 @@
 import time as tm
 
 from xso.model import Model
-from xso.solvers import SolverABC, IVPSolver, StepwiseSolver
+from xso.solvers import SolverABC, IVPSolver, StepwiseSolver, FSolver
 
-_built_in_solvers = {'solve_ivp': IVPSolver, 'stepwise': StepwiseSolver}
+_built_in_solvers = {'solve_ivp': IVPSolver, 'fsolve':FSolver, 'stepwise': StepwiseSolver}
 
 
 class XSOCore:

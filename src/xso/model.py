@@ -71,7 +71,7 @@ class Model:
                 index += _length
         return state_dict
 
-    def model_function(self, time=None, current_state=None, forcing=None):
+    def model_function(self, time=None, current_state=None, forcing=None, only_return_state=False):
         """ General model function that computes forcings and fluxes.
         Is called within solve function of Solver.
 
@@ -89,7 +89,7 @@ class Model:
 
         # unpack flat state:
         state = self.unpack_flat_state(current_state)
-
+        #print("STATE b4 solve", state)
         # Return forcings for time point:
         if time is not None:
             forcing_now = defaultdict()
@@ -172,8 +172,16 @@ class Model:
 
             state_out.append(np.sum(var_fluxes, axis=0))
 
-        # flatten state again:
-        full_output = np.concatenate([[v for val in state_out for v in val.ravel()],
-                                      [v for val in fluxes_out for v in val.ravel()]], axis=None)
+        if only_return_state:
+            # flatten state again:
+            state_output = np.concatenate([[v for val in state_out for v in val.ravel()]], axis=None)
+            # set time flux to zero
+            state_output[0] = 0
+            #print("STATE_OUT", state_output)
+            return state_output
+        else:
+            # flatten state again:
+            full_output = np.concatenate([[v for val in state_out for v in val.ravel()],
+                                          [v for val in fluxes_out for v in val.ravel()]], axis=None)
 
-        return full_output
+            return full_output
