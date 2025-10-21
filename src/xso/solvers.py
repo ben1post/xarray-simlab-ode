@@ -232,12 +232,13 @@ class IVPSolver(SolverABC):
         full_model_out = solve_ivp(model.model_function,
                                    t_span=[model.time[0], model.time[-1]],
                                    y0=full_init,
-                                   t_eval=model.time, events=instability_event)
+                                   t_eval=model.time,
+                                   events=instability_event)
 
-        if full_model_out.t_events[0].size > 0:
-            print("Event triggered at t =", full_model_out.t_events[0])
-        else:
-            print("No event detected")
+        # if full_model_out.t_events[0].size > 0:
+        #     print("Event triggered at t =", full_model_out.t_events[0])
+        # else:
+        #     print("No event detected")
 
         # expected number of time steps:
         n_expected_timesteps = len(model.time)
