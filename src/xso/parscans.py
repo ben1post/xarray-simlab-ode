@@ -3,6 +3,7 @@ import warnings
 import xarray as xr
 import xsimlab as xs
 import time as tm
+import numpy as np
 from multiprocessing import Pool
 from IPython.display import clear_output
 import os
@@ -96,6 +97,27 @@ def _worker_initializer(module_name, model_name_str, model_setup_name_str):
         raise e
 
 
+def _scalarize_param_for_coord(param_val):
+    """
+    Converts a parameter value (scalar or array) into a scalar
+    for use as an xarray coordinate.
+    """
+    if np.isscalar(param_val):
+        return param_val
+
+    try:
+        # Use np.max as a general rule for arrays.
+        # This works for [0, 0, 0, 0.005] -> 0.005
+        # This also works for [0.1, 0, 0] -> 0.1
+        # Note: [0.1, 0] and [0, 0.1] will both map to 0.1
+        # The user must ensure this scalar representation is unique
+        # for their scan.
+        return np.max(param_val)
+    except Exception:
+        # Fallback for other non-scalar types
+        return str(param_val)
+
+
 def _run_model_scan_point(task_data):
     """Executes a single simulation run within a worker process.
 
@@ -131,10 +153,13 @@ def _run_model_scan_point(task_data):
             input_vars=scan_param_dict
         ).xsimlab.run()
 
-    # Ensure all scan parameters are added to the output coordinates
-    model_out = model_out.assign_coords(
-        {p_name: p_value for p_name, p_value in scan_param_dict.items()}
-    )
+    # Ensure all SCALAR scan parameters are added to the output coordinates
+    # This avoids adding the non-scalar array, which causes the name conflict.
+    scalar_coords = {
+        p_name: p_value for p_name, p_value in scan_param_dict.items()
+        if np.isscalar(p_value)
+    }
+    model_out = model_out.assign_coords(scalar_coords)
 
     # Post-processing: Standardize time coordinate for clean merging
     if 'time' in model_out.coords:
@@ -154,19 +179,25 @@ def _generate_iterable_tasks_1d(parameter, par_range,
         # Start with the scan parameter
         scan_dict = {parameter: val}
 
-        # --- NEW LOGIC ---
-        # If an initial value dataset and mapping are provided:
         if initial_values_ds is not None and iv_mapping is not None:
             # Select the data for this parameter point
             iv_point = initial_values_ds.sel({parameter: val}, method='nearest')
 
-            # Use the mapping to add initial values to the scan dict
             for var_name, init_param_name in iv_mapping.items():
                 if var_name in iv_point:
-                    scan_dict[init_param_name] = iv_point[var_name].item()
+                    # Get the value (which could be scalar or array)
+                    iv_value = iv_point[var_name].values
+
+                    # Check if the value or any part of it is NaN
+                    if not np.isnan(iv_value).any():
+                        # If it's NOT NaN, add it to the scan dictionary
+                        scan_dict[init_param_name] = iv_value
+                    else:
+                        # If it IS NaN, do nothing. The model will use
+                        # its pre-defined default initial value.
+                        pass
                 else:
                     print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
-        # --- END NEW LOGIC ---
 
         tasks.append({
             'scan_param_dict': scan_dict
@@ -224,22 +255,39 @@ def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
     for val1 in par_range1:
         inner_tasks = []
         for val2 in par_range2:
-            # Start with the scan parameters
+
+            # 1. The scan_dict for the model run *must* use the full, original params
             scan_dict = {par1: val1, par2: val2}
 
-            # --- NEW LOGIC ---
-            # If an initial value dataset and mapping are provided:
-            if initial_values_ds is not None and iv_mapping is not None:
-                # Select the data for this parameter point
-                iv_point = initial_values_ds.sel({par1: val1, par2: val2}, method='nearest')
+            # 2. The selectors for the .sel() method *must* use the scalarized coords
+            #    (This relies on your _scalarize_param_for_coord helper function)
+            p1_sel_key = par1
+            p2_sel_key = par2
+            p1_sel_val = _scalarize_param_for_coord(val1)
+            p2_sel_val = _scalarize_param_for_coord(val2)
 
-                # Use the mapping to add initial values to the scan dict
+            if initial_values_ds is not None and iv_mapping is not None:
+                # Use the *scalarized* keys/values for .sel()
+                iv_point = initial_values_ds.sel(
+                    {p1_sel_key: p1_sel_val, p2_sel_key: p2_sel_val},
+                    method='nearest'
+                )
+
                 for var_name, init_param_name in iv_mapping.items():
                     if var_name in iv_point:
-                        scan_dict[init_param_name] = iv_point[var_name].item()
+                        # Get the value (which could be scalar or array)
+                        iv_value = iv_point[var_name].values
+
+                        # Check if the value or any part of it is NaN
+                        if not np.isnan(iv_value).any():
+                            # If it's NOT NaN, add it to the scan dictionary
+                            scan_dict[init_param_name] = iv_value
+                        else:
+                            # If it IS NaN, do nothing. The model will use
+                            # its pre-defined default initial value.
+                            pass
                     else:
                         print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
-            # --- END NEW LOGIC ---
 
             inner_tasks.append({
                 'scan_param_dict': scan_dict
@@ -275,22 +323,22 @@ def _unpack_par_scan_2d(datasets):
     dats_out = []
 
     # Outer loop: Iterates over the first parameter (p1)
-    for par1, val1, par2, inner_datasets in datasets:
+    # 'inner_datasets' is now a list of (val2, ds) tuples
+    for par1, val1, par2, inner_results_list in datasets:
         dat_out = []
 
+        # Get a scalar coordinate value for P1
+        scalar_val1 = _scalarize_param_for_coord(val1)
+
         # Inner loop: Iterates over the second parameter (p2)
-        for ds in inner_datasets:
+        for val2, ds in inner_results_list:  # Unpack the (val2, ds) tuple
 
-            if par2 not in ds.coords:
-                raise ValueError(
-                    f"Second scan parameter '{par2}' not found as a coordinate in inner scan output. Cannot unpack 2D scan results.")
-
-            # Use .item() to safely extract the scalar value from the coordinate
-            par2_value = ds.coords[par2].values.item()
+            # Get a scalar coordinate value for P2
+            scalar_val2 = _scalarize_param_for_coord(val2)
 
             # Combine the P1 and P2 coordinates and create the dimensions
             dat_out.append(
-                ds.assign_coords({par1: val1, par2: par2_value})
+                ds.assign_coords({par1: scalar_val1, par2: scalar_val2})
                 .expand_dims(par1)
                 .expand_dims(par2)
             )
@@ -326,9 +374,16 @@ def _run_inner_scan_with_progress(task_tuple):
 
     # Since the worker is already initialized with the model, we run the inner tasks sequentially.
     inner_results = []
+
     for task_data in inner_task_list:
+        # Get the actual parameter value for par2 (which could be an array)
+        val2 = task_data['scan_param_dict'][par2]
+
         # Run the existing single-point function
-        inner_results.append(_run_model_scan_point(task_data))
+        ds = _run_model_scan_point(task_data)
+
+        # Append the TUPLE of (parameter_value, dataset_result)
+        inner_results.append((val2, ds))
 
     # Return the metadata and results for unpacking
     return (par1, val1, par2, inner_results)
@@ -602,10 +657,8 @@ def _run_model_scan_stability(task_data):
     # Create stability hook
     hook = StabilityAnalysisHook()
 
-    # Create a context manager:
-    # - If suppress_prints is True, redirect stdout to os.devnull (a "black hole").
-    # - If False, use nullcontext (which does nothing).
-    ctx_manager = redirect_stdout(open(os.devnull, 'w'))  # if suppress_prints else nullcontext()
+    # (This is the hard-coded suppression from your script)
+    ctx_manager = redirect_stdout(open(os.devnull, 'w'))
 
     # Run the Model with stability hook *inside* the context manager
     with ctx_manager:
@@ -614,16 +667,35 @@ def _run_model_scan_stability(task_data):
                 input_vars=scan_param_dict
             ).xsimlab.run(hooks=[hook])
 
-    # Add scan parameters as coordinates
-    model_out = model_out.assign_coords(
-        {p_name: p_value for p_name, p_value in scan_param_dict.items()}
-    )
+    # --- FIX 1: Only assign SCALAR parameters as coordinates ---
+    # This prevents conflicts with non-scalar scan params like your array
+    scalar_coords = {
+        p_name: p_value for p_name, p_value in scan_param_dict.items()
+        if np.isscalar(p_value)
+    }
+    model_out = model_out.assign_coords(scalar_coords)
+    # --- END FIX 1 ---
 
-    # Add stability results to dataset attributes
+    # --- FIX 2: Make stability extraction robust to failures ---
     stability_data = hook.get_results()
-    if stability_data:
-        model_out['stability'] = stability_data['stability']
-        model_out['max_eigenvalue'] = stability_data['max_eigenvalue_real']
+
+    try:
+        # Try to get the results
+        if stability_data and 'stability' in stability_data and 'max_eigenvalue_real' in stability_data:
+            model_out['stability'] = stability_data['stability']
+            model_out['max_eigenvalue'] = stability_data['max_eigenvalue_real']
+        else:
+            # The hook ran but results are missing (e.g., due to default IVs failing)
+            # Assign NaN to these coordinates so the point is marked as failed.
+            model_out['stability'] = ((), np.nan)  # Using xarray tuple format for a scalar
+            model_out['max_eigenvalue'] = ((), np.nan)
+
+    except Exception as e:
+        # Catch any other unexpected error during result extraction
+        print(f"WARNING: Worker failed to extract stability results. Details: {e}")
+        model_out['stability'] = ((), np.nan)
+        model_out['max_eigenvalue'] = ((), np.nan)
+    # --- END FIX 2 ---
 
     # Standardize time coordinate
     if 'time' in model_out.coords:
@@ -694,9 +766,17 @@ def _run_inner_stability_scan(task_tuple):
 
     # Run the inner tasks sequentially with stability analysis
     inner_results = []
+
     for task_data in inner_task_list:
+        # Get the actual parameter value for par2 (which could be an array)
+        # We need this to pass back to the unpacker
+        val2 = task_data['scan_param_dict'][par2]
+
         # Run the stability analysis version
-        inner_results.append(_run_model_scan_stability(task_data))
+        ds = _run_model_scan_stability(task_data)
+
+        # Append the TUPLE of (parameter_value, dataset_result)
+        inner_results.append((val2, ds))
 
     # Return the metadata and results for unpacking
     return (par1, val1, par2, inner_results)
