@@ -1,9 +1,12 @@
 import importlib
 import warnings
 import xarray as xr
+import xsimlab as xs
 import time as tm
 from multiprocessing import Pool
 from IPython.display import clear_output
+import os
+from contextlib import redirect_stdout, nullcontext
 
 # Suppress warnings that clutter output, especially common in scientific computing libraries
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -13,7 +16,51 @@ _global_model = None
 _global_model_setup = None
 
 
-def _worker_initializer(module_name):
+def _validate_model_loading(module_name, model_name_str, model_setup_name_str):
+    """
+    Performs a pre-flight check in the main process to ensure
+    the model and setup objects can be loaded before starting workers.
+
+    Raises ImportError or AttributeError if loading fails.
+    """
+    try:
+        model_module = importlib.import_module(module_name)
+
+        # Test-load the model
+        try:
+            getattr(model_module, model_name_str)
+        except AttributeError as e:
+            print(f"\n[FATAL PRE-CHECK ERROR] Failed to find model object '{model_name_str}' in '{module_name}.py'.")
+            # Try to find suggestions
+            suggestions = [o for o in dir(model_module) if 'model' in o.lower() and not o.startswith('__')]
+            if suggestions:
+                print(f"Did you mean one of these? {suggestions}")
+            raise e  # Re-raise to stop execution
+
+        # Test-load the model_setup
+        try:
+            getattr(model_module, model_setup_name_str)
+        except AttributeError as e:
+            print(
+                f"\n[FATAL PRE-CHECK ERROR] Failed to find setup object '{model_setup_name_str}' in '{module_name}.py'.")
+            # Try to find suggestions
+            suggestions = [o for o in dir(model_module) if 'setup' in o.lower() and not o.startswith('__')]
+            if suggestions:
+                print(f"Did you mean one of these? {suggestions}")
+            raise e  # Re-raise to stop execution
+
+    except ImportError as e:
+        print(f"\n[FATAL PRE-CHECK ERROR] Failed to import model file: '{module_name}.py'.")
+        print(f"Please check that the file exists and is in your Python path.")
+        print(f"Details: {e}")
+        raise e  # Re-raise to stop execution
+    except Exception as e:
+        print(f"\n[FATAL PRE-CHECK ERROR] An unexpected error occurred while loading '{module_name}'.")
+        print(f"Details: {e}")
+        raise e
+
+
+def _worker_initializer(module_name, model_name_str, model_setup_name_str):
     """Initializes a worker process for multiprocessing.
 
     Dynamically imports the model and model_setup objects from the given
@@ -25,20 +72,27 @@ def _worker_initializer(module_name):
     ----------
     module_name : str
         The name of the Python module (file) that contains the
-        `model` and `model_setup` objects.
+        model and model_setup objects.
+    model_name_str : str
+        The string name of the model object to load (e.g., 'model').
+    model_setup_name_str : str
+        The string name of the model_setup object to load (e.g., 'model_setup_ivp').
     """
     global _global_model
     global _global_model_setup
 
     try:
         model_module = importlib.import_module(module_name)
-        _global_model = model_module.model
-        _global_model_setup = model_module.model_setup
+
+        # Use getattr to dynamically fetch attributes by their string names
+        _global_model = getattr(model_module, model_name_str)
+        _global_model_setup = getattr(model_module, model_setup_name_str)
 
     except Exception as e:
-        # Prints to the terminal if a worker fails to load the model
-        print(f"FATAL ERROR: Worker failed to initialize model and model setup from '{module_name}'. "
-              f"Check that naming in script is coherent (model, model_setup). Details: {e}", flush=True)
+        # Updated error message for better debugging
+        print(f"FATAL ERROR: Worker failed to initialize model/setup from '{module_name}'.")
+        print(f"Attempted to load: model='{model_name_str}', setup='{model_setup_name_str}'.")
+        print(f"Check that these objects exist in your script. Details: {e}", flush=True)
         raise e
 
 
@@ -89,28 +143,34 @@ def _run_model_scan_point(task_data):
     return model_out
 
 
-def _generate_iterable_tasks_1d(parameter, par_range):
+def _generate_iterable_tasks_1d(parameter, par_range,
+                                initial_values_ds=None, iv_mapping=None):
     """Creates the list of task dictionaries for a 1D parameter scan.
 
-    Generates a list where each item is a dictionary formatted for
-    `_run_model_scan_point`. Each dictionary contains the parameter
-    name and one value from the `par_range`.
-
-    Parameters
-    ----------
-    parameter : str
-        The name of the parameter being scanned.
-    par_range : iterable
-        An iterable (e.g., list, numpy array) of values for the parameter.
-
-    Returns
-    -------
-    list
-        A list of task dictionaries.
+    Can optionally inject initial values from a previous dataset.
     """
     tasks = []
     for val in par_range:
-        tasks.append({'scan_param_dict': {parameter: val}})
+        # Start with the scan parameter
+        scan_dict = {parameter: val}
+
+        # --- NEW LOGIC ---
+        # If an initial value dataset and mapping are provided:
+        if initial_values_ds is not None and iv_mapping is not None:
+            # Select the data for this parameter point
+            iv_point = initial_values_ds.sel({parameter: val}, method='nearest')
+
+            # Use the mapping to add initial values to the scan dict
+            for var_name, init_param_name in iv_mapping.items():
+                if var_name in iv_point:
+                    scan_dict[init_param_name] = iv_point[var_name].item()
+                else:
+                    print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
+        # --- END NEW LOGIC ---
+
+        tasks.append({
+            'scan_param_dict': scan_dict
+        })
     return tasks
 
 
@@ -154,39 +214,36 @@ def _unpack_par_scan_1d(iterable_tasks, data):
     return xr.combine_by_coords(dat_out)
 
 
-def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2):
+def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
+                                initial_values_ds=None, iv_mapping=None):
     """Creates the nested task structure for a 2D parameter scan.
 
-    Generates an "outer" list of tasks. Each item in this list corresponds
-    to one value of the *first* parameter (`par1`) and contains all the
-    necessary information for a *full 1D scan* of the *second*
-    parameter (`par2`). This structure is designed for a "parallel
-    outer loop, sequential inner loop" execution.
-
-    Parameters
-    ----------
-    par1 : str
-        The name of the first (outer) parameter.
-    par_range1 : iterable
-        An iterable of values for the first parameter.
-    par2 : str
-        The name of the second (inner) parameter.
-    par_range2 : iterable
-        An iterable of values for the second parameter.
-
-    Returns
-    -------
-    list
-        A list of tuples. Each tuple contains
-        `(par1_name, par1_value, par2_name, inner_task_list)`.
+    Can optionally inject initial values from a previous dataset.
     """
-    # Outer iterable format:
-    # (param1_name, param1_value, param2_name, [inner_task_dict_1, inner_task_dict_2, ...])
     outer_tasks = []
     for val1 in par_range1:
-        # Create the iterable for the inner (p2) scan tasks
-        # Each inner task now contains BOTH P1 and P2 values
-        inner_tasks = [{'scan_param_dict': {par1: val1, par2: val2}} for val2 in par_range2]
+        inner_tasks = []
+        for val2 in par_range2:
+            # Start with the scan parameters
+            scan_dict = {par1: val1, par2: val2}
+
+            # --- NEW LOGIC ---
+            # If an initial value dataset and mapping are provided:
+            if initial_values_ds is not None and iv_mapping is not None:
+                # Select the data for this parameter point
+                iv_point = initial_values_ds.sel({par1: val1, par2: val2}, method='nearest')
+
+                # Use the mapping to add initial values to the scan dict
+                for var_name, init_param_name in iv_mapping.items():
+                    if var_name in iv_point:
+                        scan_dict[init_param_name] = iv_point[var_name].item()
+                    else:
+                        print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
+            # --- END NEW LOGIC ---
+
+            inner_tasks.append({
+                'scan_param_dict': scan_dict
+            })
 
         # Store metadata and inner tasks for processing
         outer_tasks.append(
@@ -277,7 +334,8 @@ def _run_inner_scan_with_progress(task_tuple):
     return (par1, val1, par2, inner_results)
 
 
-def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes):
+def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
+                         model_name, model_setup_name):
     """Manages the core execution and progress reporting for a 2D scan.
 
     Sets up the outer loop tasks and initializes the `multiprocessing.Pool`.
@@ -329,7 +387,7 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
         with Pool(
                 processes=processes,
                 initializer=_worker_initializer,
-                initargs=(model_file_name,)
+                initargs=(model_file_name, model_name, model_setup_name,)
         ) as p:
 
             # Use p.imap_unordered for better progress tracking
@@ -359,7 +417,8 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
 
 
 def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
-                    param_name2=None, param_values2=None):
+                    param_name2=None, param_values2=None,
+                    model_name='model', model_setup_name='model_setup'):
     """Executes a 1D or 2D parallel parameter scan for an xsimlab model.
 
     This is the main user-facing function. It dynamically imports the
@@ -393,6 +452,17 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         Returns `None` if the execution failed.
     """
 
+    print(f"--- Starting Parallel Scan ---")
+    print(f"Validating model '{model_name}' and setup '{model_setup_name}' from '{model_file_name}'...")
+    try:
+        _validate_model_loading(model_file_name, model_name, model_setup_name)
+        print("Validation successful. Proceeding with scan.")
+    except Exception:
+        # The _validate_model_loading function already printed the detailed error.
+        print("Scan aborted due to failed pre-flight check.")
+        return None  # Stop execution immediately
+    print(f"--------------------------------")
+
     if param_name2 is None:
         # --- 1D Scan Logic ---
         iter_scan = _generate_iterable_tasks_1d(param_name, param_values)
@@ -406,7 +476,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             with Pool(
                     processes=processes,
                     initializer=_worker_initializer,
-                    initargs=(model_file_name,)
+                    initargs=(model_file_name, model_name, model_setup_name,)
             ) as p:
                 data = p.map(_run_model_scan_point, iter_scan)
 
@@ -426,7 +496,8 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             raise ValueError("param_values2 must be provided when param_name2 is specified.")
 
         nested_data, run_time = _run_2d_parscan_core(
-            model_file_name, param_name, param_values, param_name2, param_values2, processes
+            model_file_name, param_name, param_values, param_name2, param_values2, processes,
+            model_name, model_setup_name
         )
 
         if nested_data is None:
@@ -435,4 +506,309 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         # 3. Combine Results and Report
         out_ds = _unpack_par_scan_2d(nested_data)
         print(f"\n2D Scan complete. Total Time taken: {round(run_time, 5)} seconds.")
+        return out_ds
+
+
+# Alternative: Class-based approach for more control
+class StabilityAnalysisHook(xs.RuntimeHook):
+    """
+    Runtime hook class for capturing stability analysis results.
+
+    This class-based approach allows for more control and state management
+    compared to the function-based approach.
+
+    Usage
+    -----
+    >>> hook = StabilityAnalysisHook()
+    >>> with model:
+    ...     output = model_setup.xsimlab.run(hooks=[hook])
+    >>>
+    >>> # Retrieve results
+    >>> stability_data = hook.get_results()
+    >>> if stability_data:
+    ...     output.attrs['stability'] = stability_data
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.stability_results = {}
+        self._solver_found = False
+
+    @xs.runtime_hook("initialize", "model", "post")
+    def check_solver_type(self, model, context, state):
+        """Check if the solver supports stability analysis at initialization."""
+        try:
+            backend = state.get(('Core', 'core'))
+            if backend and hasattr(backend.solver, '__class__'):
+                solver_name = backend.solver.__class__.__name__
+                if 'Stability' in solver_name or 'Bifurcation' in solver_name:
+                    self._solver_found = True
+                    print(f"[HOOK] Detected {solver_name} - will capture stability results")
+        except:
+            pass
+
+    @xs.runtime_hook("finalize", "model", "post")
+    def capture_results(self, model, context, state):
+        """Capture stability results after model finalization."""
+        if not self._solver_found:
+            return
+
+        try:
+            backend = state.get(('Core', 'core'))
+
+            if backend:
+                solver = backend.solver
+
+                # Try different storage locations
+                if hasattr(solver, 'stability_results'):
+                    self.stability_results = solver.stability_results.copy()
+                elif hasattr(backend, 'stability_metadata'):
+                    self.stability_results = backend.stability_metadata.copy()
+
+                if self.stability_results:
+                    self._print_summary()
+
+        except Exception as e:
+            print(f"[HOOK WARNING] Could not capture stability results: {e}")
+
+    def _print_summary(self):
+        """Print a summary of captured stability results."""
+        if 'stability' in self.stability_results:
+            print(f"[HOOK] System stability: {self.stability_results['stability'].upper()}")
+        if 'max_eigenvalue_real' in self.stability_results:
+            print(f"[HOOK] Max eigenvalue real part: {self.stability_results['max_eigenvalue_real']:.4e}")
+
+    def get_results(self):
+        """Get the captured stability analysis results."""
+        return self.stability_results.copy()
+
+    def clear(self):
+        """Clear stored results."""
+        self.stability_results = {}
+        self._solver_found = False
+
+
+def _run_model_scan_stability(task_data):
+    """Executes a single simulation run with stability analysis."""
+
+    scan_param_dict = task_data['scan_param_dict']
+
+    model = _global_model
+    model_setup = _global_model_setup
+
+    if model is None or model_setup is None:
+        raise RuntimeError("Model objects were not initialized in this worker process.")
+
+    # Create stability hook
+    hook = StabilityAnalysisHook()
+
+    # Create a context manager:
+    # - If suppress_prints is True, redirect stdout to os.devnull (a "black hole").
+    # - If False, use nullcontext (which does nothing).
+    ctx_manager = redirect_stdout(open(os.devnull, 'w'))  # if suppress_prints else nullcontext()
+
+    # Run the Model with stability hook *inside* the context manager
+    with ctx_manager:
+        with model:
+            model_out = model_setup.xsimlab.update_vars(
+                input_vars=scan_param_dict
+            ).xsimlab.run(hooks=[hook])
+
+    # Add scan parameters as coordinates
+    model_out = model_out.assign_coords(
+        {p_name: p_value for p_name, p_value in scan_param_dict.items()}
+    )
+
+    # Add stability results to dataset attributes
+    stability_data = hook.get_results()
+    if stability_data:
+        model_out['stability'] = stability_data['stability']
+        model_out['max_eigenvalue'] = stability_data['max_eigenvalue_real']
+
+    # Standardize time coordinate
+    if 'time' in model_out.coords:
+        model_out['time'] = model_out.time.round(9)
+
+    return model_out
+
+
+def _run_2d_stabilityscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
+                               model_name, model_setup_name,
+                               initial_values_ds, iv_mapping):
+    """Manages the core execution and progress reporting for a 2D stability scan."""
+
+    # Tasks for the outer parameter (P1)
+    outer_tasks = _generate_iterable_tasks_2d(
+        param_name, param_values, param_name2, param_values2,
+        initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+    )
+    n_outer_points = len(param_values)
+
+    # Storage for results and timing
+    nested_data = []
+    start = tm.time()
+
+    print(f"Starting 2D stability scan of '{model_file_name}' ({param_name} x {param_name2}).")
+    print(f"Outer loop ({n_outer_points} points) running in parallel with {processes} workers.")
+    print(f"Inner loop ({len(param_values2)} points) running sequentially per worker.")
+    print(f"Total points: {n_outer_points * len(param_values2)}.")
+
+    try:
+        # Start Pool for the outer (P1) parallel scan
+        with Pool(
+                processes=processes,
+                initializer=_worker_initializer,
+                # --- MODIFIED LINE ---
+                initargs=(model_file_name, model_name, model_setup_name,)
+        ) as p:
+
+            # Use p.imap_unordered for better progress tracking
+            results_iterator = p.imap_unordered(_run_inner_stability_scan, outer_tasks)
+
+            # --- Progress Tracking Loop ---
+            for i, result in enumerate(results_iterator, start=1):
+                nested_data.append(result)
+
+                # Print progress for the outer loop
+                p1_name = result[0]
+                p1_val = result[1]
+
+                # <-- REQUIRED JUPYTER CLEAR OUTPUT -->
+                clear_output(wait=True)
+
+                print(f"PROGRESS: Completed {i}/{n_outer_points} outer points. ({p1_name} = {p1_val}).")
+
+    except Exception as e:
+        print(f"\n[ERROR] Parallel execution failed during 2D stability scan.")
+        print(f"Details: {e}")
+        return None, None
+
+    end = tm.time()
+
+    return nested_data, end - start
+
+
+def _run_inner_stability_scan(task_tuple):
+    """Wraps the sequential execution of an inner 1D stability scan for a 2D scan."""
+    par1, val1, par2, inner_task_list = task_tuple
+
+    # Run the inner tasks sequentially with stability analysis
+    inner_results = []
+    for task_data in inner_task_list:
+        # Run the stability analysis version
+        inner_results.append(_run_model_scan_stability(task_data))
+
+    # Return the metadata and results for unpacking
+    return (par1, val1, par2, inner_results)
+
+
+def run_xso_stabilityscan(model_file_name, param_name, param_values, processes=20,
+                          param_name2=None, param_values2=None,
+                          model_name='model', model_setup_name='model_setup',
+                          initial_values_ds=None, iv_mapping=None):
+    """Executes a 1D or 2D parallel parameter scan with stability analysis for each run.
+
+    This function performs the same parameter scan as run_xso_parscan but includes
+    stability analysis at each parameter point using the NumericalStabilitySolver.
+    Stability results are stored in the dataset attributes.
+
+    Parameters
+    ----------
+    model_file_name : str
+        The name of the Python file (module) containing the
+        'model' and 'model_setup' objects (e.g., 'my_model').
+    param_name : str
+        The name of the primary parameter to scan (e.g., 'Component__variable').
+    param_values : iterable
+        Array or sequence of values for the primary parameter.
+    processes : int, optional
+        Number of parallel processes to use. Default is 20.
+    param_name2 : str, optional
+        The name of the second parameter for a 2D scan. Default is None.
+    param_values2 : iterable, optional
+        Array or sequence of values for the second parameter.
+        Required if `param_name2` is given. Default is None.
+    model_name : str, optional
+        The string name of the model object to load (e.g., 'model').
+    model_setup_name : str, optional
+        The string name of the model_setup object to load (e.g., 'model_setup_ivp').
+    initial_values_ds : xarray.Dataset, optional
+        A dataset (e.g., from a previous `run_xso_parscan`) containing
+        the initial values to use for this scan. The dataset must
+        be indexed by the same scan parameters (e.g., `param_name`).
+    iv_mapping : dict, optional
+        A dictionary mapping variable names from `initial_values_ds`
+        to the model's *initial value parameter names*.
+        Example: {'Phytoplankton__value': 'Phytoplankton__value_init'}
+
+    Returns
+    -------
+    xarray.Dataset
+        The combined `xarray.Dataset` of the scan results with stability
+        analysis stored in attributes. Returns `None` if the execution failed.
+    """
+
+    print(f"--- Starting Stability Scan ---")
+    print(f"Validating model '{model_name}' and setup '{model_setup_name}' from '{model_file_name}'...")
+    try:
+        _validate_model_loading(model_file_name, model_name, model_setup_name)
+        print("Validation successful. Proceeding with scan.")
+    except Exception:
+        print("Scan aborted due to failed pre-flight check.")
+        return None
+
+    if initial_values_ds is not None:
+        if iv_mapping is None:
+            raise ValueError("iv_mapping must be provided if initial_values_ds is used.")
+        print(f"Injecting initial values from dataset using mapping: {iv_mapping}")
+    print(f"--------------------------------")
+
+    if param_name2 is None:
+        # --- 1D Scan Logic ---
+        iter_scan = _generate_iterable_tasks_1d(
+            param_name, param_values,
+            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+        )
+        n_points = len(param_values)
+
+        print(
+            f"Starting 1D stability scan of '{model_file_name}' over {n_points} points using {processes} workers...")
+
+        start = tm.time()
+
+        try:
+            with Pool(
+                    processes=processes,
+                    initializer=_worker_initializer,
+                    initargs=(model_file_name, model_name, model_setup_name,)
+            ) as p:
+                data = p.map(_run_model_scan_stability, iter_scan)
+
+        except Exception as e:
+            print(f"\n[ERROR] Parallel execution failed.")
+            print(f"Details: {e}")
+            return None
+
+        end = tm.time()
+        out_ds = _unpack_par_scan_1d(iter_scan, data)
+        print(f"1D Stability Scan complete. Time taken: {round(end - start, 5)} seconds.")
+        return out_ds
+
+    else:
+        # --- 2D Scan Logic ---
+        if param_values2 is None:
+            raise ValueError("param_values2 must be provided when param_name2 is specified.")
+
+        nested_data, run_time = _run_2d_stabilityscan_core(
+            model_file_name, param_name, param_values, param_name2, param_values2, processes,
+            model_name, model_setup_name,
+            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+        )
+
+        if nested_data is None:
+            return None
+
+        # 3. Combine Results and Report
+        out_ds = _unpack_par_scan_2d(nested_data)
+        print(f"\n2D Stability Scan complete. Total Time taken: {round(run_time, 5)} seconds.")
         return out_ds
