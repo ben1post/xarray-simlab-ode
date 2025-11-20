@@ -50,7 +50,7 @@ def variable(foreign=False, flux=None, negative=False, list_input=False,
         Dictionnary of additional metadata (e.g., standard_name,
         units, math_symbol...).
     """
-    attrs.update({'Phydra_store_out': True})
+    attrs.update({'xso_store_out': True})
 
     metadata = {
         "var_type": XSOVarType.VARIABLE,
@@ -98,7 +98,7 @@ def forcing(foreign=False,
         units, math_symbol...).
     """
 
-    attrs.update({'Phydra_store_out': True})
+    attrs.update({'xso_store_out': True})
 
     metadata = {
         "var_type": XSOVarType.FORCING,
@@ -185,7 +185,7 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
 
     def create_attrib(function):
 
-        attrs.update({'Phydra_store_out': True})
+        attrs.update({'xso_store_out': True})
 
         metadata = {
             "var_type": XSOVarType.FLUX,

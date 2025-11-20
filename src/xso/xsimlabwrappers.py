@@ -96,7 +96,7 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
         for var in model._var_cache.values():
             try:
                 if var['metadata']['intent'] is VarIntent.OUT:
-                    if var['metadata']['attrs']['Phydra_store_out']:
+                    if var['metadata']['attrs']['xso_store_out']:
                         full_output_vars[var['name']] = None
             except:
                 pass

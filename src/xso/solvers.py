@@ -248,7 +248,9 @@ class IVPSolver(SolverABC):
                                    t_span=[model.time[0], model.time[-1]],
                                    y0=full_init,
                                    t_eval=model.time,
-                                   events=instability_event)
+                                   events=instability_event,
+                                   rtol=1e-6,
+                                   atol=1e-9)
 
         # if full_model_out.t_events[0].size > 0:
         #     print("Event triggered at t =", full_model_out.t_events[0])
@@ -1079,9 +1081,9 @@ class NumericalStabilitySolver(IVPSolver):
             max_real = np.max(real_parts)
 
             # Determine stability
-            if max_real < -1e-9:
+            if max_real < -1e-6:
                 stability = 'stable'
-            elif max_real > 1e-9:
+            elif max_real > 1e-6:
                 stability = 'unstable'
             else:
                 stability = 'marginal'

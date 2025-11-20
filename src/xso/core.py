@@ -4,8 +4,9 @@ from xso.model import Model
 from xso.solvers import (SolverABC, IVPSolver, StepwiseSolver, FSolver,
                          DerivativeCalculator, NumericalStabilitySolver, HydridStabilitySolver)
 
-_built_in_solvers = {'solve_ivp': IVPSolver, 'fsolve':FSolver, 'deriv':DerivativeCalculator, 'stepwise': StepwiseSolver,
-                     'stability':NumericalStabilitySolver, 'hybrid_stability':HydridStabilitySolver}
+_built_in_solvers = {'solve_ivp': IVPSolver, 'fsolve': FSolver, 'deriv': DerivativeCalculator,
+                     'stepwise': StepwiseSolver,
+                     'stability': NumericalStabilitySolver, 'hybrid_stability': HydridStabilitySolver}
 
 
 class XSOCore:
@@ -115,6 +116,5 @@ class XSOCore:
         # stop measuring solver time:
         self.solve_end = tm.time()
         # TODO: diagnostic print here
-        #print(f"Model was solved in {round(self.solve_end - self.solve_start, 5)} seconds")
+        # print(f"Model was solved in {round(self.solve_end - self.solve_start, 5)} seconds")
         self.solver.cleanup()
-

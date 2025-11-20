@@ -51,10 +51,28 @@ def _validate_model_loading(module_name, model_name_str, model_setup_name_str):
             raise e  # Re-raise to stop execution
 
     except ImportError as e:
+        # --- MODIFIED ERROR BLOCK ---
         print(f"\n[FATAL PRE-CHECK ERROR] Failed to import model file: '{module_name}.py'.")
-        print(f"Please check that the file exists and is in your Python path.")
         print(f"Details: {e}")
+
+        print("\n--- 💡 Debugging Import Error ---")
+        try:
+            cwd = os.getcwd()
+            print(f"Python's Current Working Directory (CWD) is:")
+            print(f"   {cwd}")
+            print(f"\nIs this the folder where your '{module_name}.py' file is located?")
+
+            expected_file_path = os.path.join(cwd, module_name + ".py")
+            if not os.path.exists(expected_file_path):
+                print(f"-> The file '{module_name}.py' was NOT found in the CWD.")
+            else:
+                print(f"-> The file '{module_name}.py' WAS found in the CWD (this is good!).")
+
+        except Exception as debug_e:
+            print(f"(Could not retrieve full debug info: {debug_e})")
+        # --- END OF MODIFICATION ---
         raise e  # Re-raise to stop execution
+
     except Exception as e:
         print(f"\n[FATAL PRE-CHECK ERROR] An unexpected error occurred while loading '{module_name}'.")
         print(f"Details: {e}")
@@ -172,38 +190,40 @@ def _generate_iterable_tasks_1d(parameter, par_range,
                                 initial_values_ds=None, iv_mapping=None):
     """Creates the list of task dictionaries for a 1D parameter scan.
 
-    Can optionally inject initial values from a previous dataset.
+    Injects initial values only if they are finite AND biologically plausible.
     """
     tasks = []
     for val in par_range:
-        # Start with the scan parameter
         scan_dict = {parameter: val}
-
         if initial_values_ds is not None and iv_mapping is not None:
-            # Select the data for this parameter point
             iv_point = initial_values_ds.sel({parameter: val}, method='nearest')
-
             for var_name, init_param_name in iv_mapping.items():
                 if var_name in iv_point:
-                    # Get the value (which could be scalar or array)
                     iv_value = iv_point[var_name].values
 
-                    # Check if the value or any part of it is NaN
-                    if not np.isnan(iv_value).any():
-                        # If it's NOT NaN, add it to the scan dictionary
+                    # --- FINAL CHECK ---
+                    # Check 1: Is it finite?
+                    is_finite = np.isfinite(iv_value).all()
+
+                    # Check 2: Is it biologically plausible (non-negative)?
+                    # Assumes variables with 'biomass' or 'value' (for Nutrient) should be >= 0
+                    is_plausible = True
+                    if 'biomass' in var_name or 'value' in var_name:
+                        try:
+                            # Use np.all() in case iv_value is an array
+                            is_plausible = np.all(iv_value >= 0)
+                        except TypeError:  # Handle non-numeric types just in case
+                            is_plausible = False
+
+                    if is_finite and is_plausible:
                         scan_dict[init_param_name] = iv_value
                     else:
-                        # If it IS NaN, do nothing. The model will use
-                        # its pre-defined default initial value.
-                        pass
+                        pass  # Use model default if check fails
+                    # --- END FINAL CHECK ---
                 else:
-                    print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
-
-        tasks.append({
-            'scan_param_dict': scan_dict
-        })
+                    print(f"Warning: '{var_name}' not found...")
+        tasks.append({'scan_param_dict': scan_dict})
     return tasks
-
 
 def _unpack_par_scan_1d(iterable_tasks, data):
     """Combines the results from a 1D parameter scan into a single Dataset.
@@ -249,54 +269,45 @@ def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
                                 initial_values_ds=None, iv_mapping=None):
     """Creates the nested task structure for a 2D parameter scan.
 
-    Can optionally inject initial values from a previous dataset.
+    Injects initial values only if they are finite AND biologically plausible.
     """
     outer_tasks = []
     for val1 in par_range1:
         inner_tasks = []
         for val2 in par_range2:
-
-            # 1. The scan_dict for the model run *must* use the full, original params
             scan_dict = {par1: val1, par2: val2}
-
-            # 2. The selectors for the .sel() method *must* use the scalarized coords
-            #    (This relies on your _scalarize_param_for_coord helper function)
-            p1_sel_key = par1
-            p2_sel_key = par2
-            p1_sel_val = _scalarize_param_for_coord(val1)
-            p2_sel_val = _scalarize_param_for_coord(val2)
+            p1_sel_val = _scalarize_param_for_coord(val1)  # Assumes you have this helper
+            p2_sel_val = _scalarize_param_for_coord(val2)  # Assumes you have this helper
 
             if initial_values_ds is not None and iv_mapping is not None:
-                # Use the *scalarized* keys/values for .sel()
-                iv_point = initial_values_ds.sel(
-                    {p1_sel_key: p1_sel_val, p2_sel_key: p2_sel_val},
-                    method='nearest'
-                )
+                try:
+                    iv_point = initial_values_ds.sel({par1: p1_sel_val, par2: p2_sel_val}, method='nearest')
+                except KeyError:
+                    iv_point = initial_values_ds.sel({par1: p1_sel_val, par2: p2_sel_val}, method='nearest')
 
                 for var_name, init_param_name in iv_mapping.items():
                     if var_name in iv_point:
-                        # Get the value (which could be scalar or array)
                         iv_value = iv_point[var_name].values
 
-                        # Check if the value or any part of it is NaN
-                        if not np.isnan(iv_value).any():
-                            # If it's NOT NaN, add it to the scan dictionary
+                        # --- FINAL CHECK ---
+                        is_finite = np.isfinite(iv_value).all()
+                        is_plausible = True
+                        if 'biomass' in var_name or 'value' in var_name:
+                            try:
+                                is_plausible = np.all(iv_value >= 0)
+                            except TypeError:
+                                is_plausible = False
+
+                        if is_finite and is_plausible:
                             scan_dict[init_param_name] = iv_value
                         else:
-                            # If it IS NaN, do nothing. The model will use
-                            # its pre-defined default initial value.
-                            pass
+                            pass  # Use model default
+                        # --- END FINAL CHECK ---
                     else:
-                        print(f"Warning: '{var_name}' not found in initial_values_ds. Skipping.")
+                        print(f"Warning: '{var_name}' not found...")
 
-            inner_tasks.append({
-                'scan_param_dict': scan_dict
-            })
-
-        # Store metadata and inner tasks for processing
-        outer_tasks.append(
-            (par1, val1, par2, inner_tasks)
-        )
+            inner_tasks.append({'scan_param_dict': scan_dict})
+        outer_tasks.append((par1, val1, par2, inner_tasks))
     return outer_tasks
 
 
@@ -390,41 +401,14 @@ def _run_inner_scan_with_progress(task_tuple):
 
 
 def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
-                         model_name, model_setup_name):
-    """Manages the core execution and progress reporting for a 2D scan.
-
-    Sets up the outer loop tasks and initializes the `multiprocessing.Pool`.
-    It uses `imap_unordered` to process the outer loop tasks in parallel,
-    which allows for real-time progress updates as each inner scan
-    (a single outer task) completes. It prints progress to the console
-    and handles exceptions.
-
-    Parameters
-    ----------
-    model_file_name : str
-        The name of the Python module to be loaded by workers.
-    param_name : str
-        Name of the first (outer) parameter.
-    param_values : iterable
-        Values for the first parameter.
-    param_name2 : str
-        Name of the second (inner) parameter.
-    param_values2 : iterable
-        Values for the second parameter.
-    processes : int
-        Number of parallel worker processes.
-
-    Returns
-    -------
-    tuple
-        A tuple containing `(nested_data, run_time)`. `nested_data` is
-        the list of results, and `run_time` is the total execution time
-        in seconds. Returns `(None, None)` on failure.
-    """
+                         model_name, model_setup_name,
+                         initial_values_ds, iv_mapping): # <-- NEW ARGS
+    """Manages the core execution and progress reporting for a 2D scan (solve_ivp)."""
 
     # Tasks for the outer parameter (P1)
     outer_tasks = _generate_iterable_tasks_2d(
-        param_name, param_values, param_name2, param_values2
+        param_name, param_values, param_name2, param_values2,
+        initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
     )
     n_outer_points = len(param_values)
 
@@ -446,6 +430,7 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
         ) as p:
 
             # Use p.imap_unordered for better progress tracking
+            # This calls the original _run_inner_scan_with_progress
             results_iterator = p.imap_unordered(_run_inner_scan_with_progress, outer_tasks)
 
             # --- Progress Tracking Loop ---
@@ -456,7 +441,6 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
                 p1_name = result[0]
                 p1_val = result[1]
 
-                # <-- REQUIRED JUPYTER CLEAR OUTPUT -->
                 clear_output(wait=True)
 
                 print(f"PROGRESS: Completed {i}/{n_outer_points} outer points. ({p1_name} = {p1_val}).")
@@ -473,54 +457,37 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
 
 def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     param_name2=None, param_values2=None,
-                    model_name='model', model_setup_name='model_setup'):
-    """Executes a 1D or 2D parallel parameter scan for an xsimlab model.
+                    model_name='model', model_setup_name='model_setup',
+                    initial_values_ds=None, iv_mapping=None):  # <-- NEW ARGS
+    """
+    Executes a 1D or 2D parallel parameter scan (using solve_ivp).
 
-    This is the main user-facing function. It dynamically imports the
-    specified model file. If only `param_name` is provided, it runs a 1D
-    parallel scan. If `param_name2` is also provided, it runs a 2D scan
-    (parallel outer loop, sequential inner loop). It handles setting up
-    the multiprocessing pool, executing the tasks, and combining the
-    results into a final `xarray.Dataset`.
-
-    Parameters
-    ----------
-    model_file_name : str
-        The name of the Python file (module) containing the
-        'model' and 'model_setup' objects (e.g., 'my_model').
-    param_name : str
-        The name of the primary parameter to scan (e.g., 'Component__variable').
-    param_values : iterable
-        Array or sequence of values for the primary parameter.
-    processes : int, optional
-        Number of parallel processes to use. Default is 20.
-    param_name2 : str, optional
-        The name of the second parameter for a 2D scan. Default is None.
-    param_values2 : iterable, optional
-        Array or sequence of values for the second parameter.
-        Required if `param_name2` is given. Default is None.
-
-    Returns
-    -------
-    xarray.Dataset
-        The combined `xarray.Dataset` of the scan results.
-        Returns `None` if the execution failed.
+    Can optionally be initialized from a dataset of steady states.
+    ... (rest of docstring) ...
     """
 
-    print(f"--- Starting Parallel Scan ---")
+    # --- Pre-flight check (unchanged) ---
+    print(f"--- Starting Parallel Scan (solve_ivp) ---")
     print(f"Validating model '{model_name}' and setup '{model_setup_name}' from '{model_file_name}'...")
     try:
         _validate_model_loading(model_file_name, model_name, model_setup_name)
         print("Validation successful. Proceeding with scan.")
     except Exception:
-        # The _validate_model_loading function already printed the detailed error.
         print("Scan aborted due to failed pre-flight check.")
-        return None  # Stop execution immediately
+        return None
+
+    if initial_values_ds is not None:
+        if iv_mapping is None:
+            raise ValueError("iv_mapping must be provided if initial_values_ds is used.")
+        print(f"Injecting initial values from dataset using mapping: {iv_mapping}")
     print(f"--------------------------------")
 
     if param_name2 is None:
         # --- 1D Scan Logic ---
-        iter_scan = _generate_iterable_tasks_1d(param_name, param_values)
+        iter_scan = _generate_iterable_tasks_1d(
+            param_name, param_values,
+            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+        )
         n_points = len(param_values)
 
         print(f"Starting 1D parallel scan of '{model_file_name}' over {n_points} points using {processes} workers...")
@@ -533,6 +500,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     initializer=_worker_initializer,
                     initargs=(model_file_name, model_name, model_setup_name,)
             ) as p:
+                # Use the original _run_model_scan_point for IVP
                 data = p.map(_run_model_scan_point, iter_scan)
 
         except Exception as e:
@@ -552,7 +520,8 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
 
         nested_data, run_time = _run_2d_parscan_core(
             model_file_name, param_name, param_values, param_name2, param_values2, processes,
-            model_name, model_setup_name
+            model_name, model_setup_name,
+            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
         )
 
         if nested_data is None:
@@ -667,16 +636,12 @@ def _run_model_scan_stability(task_data):
                 input_vars=scan_param_dict
             ).xsimlab.run(hooks=[hook])
 
-    # --- FIX 1: Only assign SCALAR parameters as coordinates ---
-    # This prevents conflicts with non-scalar scan params like your array
     scalar_coords = {
         p_name: p_value for p_name, p_value in scan_param_dict.items()
         if np.isscalar(p_value)
     }
     model_out = model_out.assign_coords(scalar_coords)
-    # --- END FIX 1 ---
 
-    # --- FIX 2: Make stability extraction robust to failures ---
     stability_data = hook.get_results()
 
     try:
@@ -695,7 +660,6 @@ def _run_model_scan_stability(task_data):
         print(f"WARNING: Worker failed to extract stability results. Details: {e}")
         model_out['stability'] = ((), np.nan)
         model_out['max_eigenvalue'] = ((), np.nan)
-    # --- END FIX 2 ---
 
     # Standardize time coordinate
     if 'time' in model_out.coords:
