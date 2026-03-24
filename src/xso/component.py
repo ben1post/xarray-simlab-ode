@@ -10,6 +10,7 @@ import numpy as np
 
 from .variables import XSOVarType
 from .backendcomps import FirstInit, SecondInit, ThirdInit, FourthInit, FifthInit
+from .solvers import SolverABC
 
 
 def _create_variables_dict(process_cls):
@@ -545,14 +546,29 @@ def component(cls=None):
         # constructed class is passed through xsimlab process decorator:
         process_cls = xs.process(new_cls)
 
-        # allow passing helper functions through to process class
-        _forcing_input_functions = [value.__name__ for value in forcing_dict.values()]
-        cls_dir = dir(cls)
-        for attribute in cls_dir:
-            if hasattr(cls, attribute) and callable(getattr(cls, attribute)):
-                if not attribute.startswith("__") and attribute not in _forcing_input_functions:
-                    # Allow setting custom attr method, to be used in component
-                    setattr(process_cls, attribute, getattr(cls, attribute))
+        class _MockSelf:
+            m = SolverABC.MathFunctionWrappers()
+
+        # store original flux functions on process class for external access
+        class FluxNamespace:
+            """Container for original flux functions, accessible via Component.fluxes.<name>"""
+            pass
+
+        flux_ns = FluxNamespace()
+        for key, var in vars_dict.items():
+            if var.metadata.get('var_type') is XSOVarType.FLUX:
+                flux_func = var.metadata.get('flux_func')
+                if flux_func:
+                    def make_static(f):
+                        mock = _MockSelf()
+                        def static_flux(**kwargs):
+                            return f(mock, **kwargs)
+                        static_flux.__name__ = f.__name__
+                        static_flux.__doc__ = f.__doc__
+                        return static_flux
+                    setattr(flux_ns, flux_func.__name__, make_static(flux_func))
+
+        setattr(process_cls, 'fluxes', flux_ns)
 
         return process_cls
 
