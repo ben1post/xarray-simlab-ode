@@ -79,6 +79,18 @@ def _validate_model_loading(module_name, model_name_str, model_setup_name_str):
         raise e
 
 
+def _validate_fixed_overrides(fixed_overrides, scan_param_names):
+    """Raise if fixed_overrides collides with parameters being scanned."""
+    if not fixed_overrides:
+        return
+    collisions = [p for p in scan_param_names if p in fixed_overrides]
+    if collisions:
+        raise ValueError(
+            f"fixed_overrides contains parameter(s) also being scanned: "
+            f"{collisions}. A parameter cannot be both scanned and held fixed."
+        )
+
+
 def _worker_initializer(module_name, model_name_str, model_setup_name_str):
     """Initializes a worker process for multiprocessing.
 
@@ -118,7 +130,7 @@ def _worker_initializer(module_name, model_name_str, model_setup_name_str):
 def _scalarize_param_for_coord(param_val):
     """
     Converts a parameter value (scalar or array) into a scalar
-    for use as an xarray coordinate.
+    for use as a xarray coordinate.
     """
     if np.isscalar(param_val):
         return param_val
@@ -187,7 +199,7 @@ def _run_model_scan_point(task_data):
 
 
 def _generate_iterable_tasks_1d(parameter, par_range,
-                                initial_values_ds=None, iv_mapping=None):
+                                initial_values_ds=None, iv_mapping=None, fixed_overrides=None):
     """Creates the list of task dictionaries for a 1D parameter scan.
 
     Injects initial values only if they are finite AND biologically plausible.
@@ -222,8 +234,14 @@ def _generate_iterable_tasks_1d(parameter, par_range,
                     # --- END FINAL CHECK ---
                 else:
                     print(f"Warning: '{var_name}' not found...")
+
+        # Allow passing parameters to scan
+        if fixed_overrides:
+            scan_dict.update(fixed_overrides)
+
         tasks.append({'scan_param_dict': scan_dict})
     return tasks
+
 
 def _unpack_par_scan_1d(iterable_tasks, data):
     """Combines the results from a 1D parameter scan into a single Dataset.
@@ -266,7 +284,7 @@ def _unpack_par_scan_1d(iterable_tasks, data):
 
 
 def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
-                                initial_values_ds=None, iv_mapping=None):
+                                initial_values_ds=None, iv_mapping=None, fixed_overrides=None):
     """Creates the nested task structure for a 2D parameter scan.
 
     Injects initial values only if they are finite AND biologically plausible.
@@ -305,6 +323,10 @@ def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
                         # --- END FINAL CHECK ---
                     else:
                         print(f"Warning: '{var_name}' not found...")
+
+            # Allow injection of parameters to scan:
+            if fixed_overrides:
+                scan_dict.update(fixed_overrides)
 
             inner_tasks.append({'scan_param_dict': scan_dict})
         outer_tasks.append((par1, val1, par2, inner_tasks))
@@ -402,13 +424,14 @@ def _run_inner_scan_with_progress(task_tuple):
 
 def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
                          model_name, model_setup_name,
-                         initial_values_ds, iv_mapping): # <-- NEW ARGS
+                         initial_values_ds, iv_mapping, fixed_overrides):  # <-- NEW ARGS
     """Manages the core execution and progress reporting for a 2D scan (solve_ivp)."""
 
     # Tasks for the outer parameter (P1)
     outer_tasks = _generate_iterable_tasks_2d(
         param_name, param_values, param_name2, param_values2,
-        initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+        initial_values_ds, iv_mapping,
+        fixed_overrides,
     )
     n_outer_points = len(param_values)
 
@@ -458,7 +481,8 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
 def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     param_name2=None, param_values2=None,
                     model_name='model', model_setup_name='model_setup',
-                    initial_values_ds=None, iv_mapping=None):  # <-- NEW ARGS
+                    initial_values_ds=None, iv_mapping=None,
+                    fixed_overrides=None):
     """
     Executes a 1D or 2D parallel parameter scan (using solve_ivp).
 
@@ -482,11 +506,15 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         print(f"Injecting initial values from dataset using mapping: {iv_mapping}")
     print(f"--------------------------------")
 
+    scan_params = [param_name] + ([param_name2] if param_name2 is not None else [])
+    _validate_fixed_overrides(fixed_overrides, scan_params)
+
     if param_name2 is None:
         # --- 1D Scan Logic ---
         iter_scan = _generate_iterable_tasks_1d(
             param_name, param_values,
-            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+            initial_values_ds, iv_mapping,
+            fixed_overrides,
         )
         n_points = len(param_values)
 
@@ -519,9 +547,11 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             raise ValueError("param_values2 must be provided when param_name2 is specified.")
 
         nested_data, run_time = _run_2d_parscan_core(
-            model_file_name, param_name, param_values, param_name2, param_values2, processes,
+            model_file_name, param_name, param_values,
+            param_name2, param_values2, processes,
             model_name, model_setup_name,
-            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+            initial_values_ds, iv_mapping,
+            fixed_overrides,
         )
 
         if nested_data is None:
