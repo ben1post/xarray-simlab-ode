@@ -700,13 +700,13 @@ def _run_model_scan_stability(task_data):
 
 def _run_2d_stabilityscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
                                model_name, model_setup_name,
-                               initial_values_ds, iv_mapping):
+                               initial_values_ds, iv_mapping, fixed_overrides=None):
     """Manages the core execution and progress reporting for a 2D stability scan."""
 
     # Tasks for the outer parameter (P1)
     outer_tasks = _generate_iterable_tasks_2d(
         param_name, param_values, param_name2, param_values2,
-        initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+        initial_values_ds, iv_mapping, fixed_overrides
     )
     n_outer_points = len(param_values)
 
@@ -779,7 +779,7 @@ def _run_inner_stability_scan(task_tuple):
 def run_xso_stabilityscan(model_file_name, param_name, param_values, processes=20,
                           param_name2=None, param_values2=None,
                           model_name='model', model_setup_name='model_setup',
-                          initial_values_ds=None, iv_mapping=None):
+                          initial_values_ds=None, iv_mapping=None, fixed_overrides=None):
     """Executes a 1D or 2D parallel parameter scan with stability analysis for each run.
 
     This function performs the same parameter scan as run_xso_parscan but includes
@@ -837,11 +837,15 @@ def run_xso_stabilityscan(model_file_name, param_name, param_values, processes=2
         print(f"Injecting initial values from dataset using mapping: {iv_mapping}")
     print(f"--------------------------------")
 
+    scan_params = [param_name] + ([param_name2] if param_name2 is not None else [])
+    _validate_fixed_overrides(fixed_overrides, scan_params)
+
     if param_name2 is None:
         # --- 1D Scan Logic ---
         iter_scan = _generate_iterable_tasks_1d(
             param_name, param_values,
-            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+            initial_values_ds, iv_mapping,
+            fixed_overrides
         )
         n_points = len(param_values)
 
@@ -876,7 +880,8 @@ def run_xso_stabilityscan(model_file_name, param_name, param_values, processes=2
         nested_data, run_time = _run_2d_stabilityscan_core(
             model_file_name, param_name, param_values, param_name2, param_values2, processes,
             model_name, model_setup_name,
-            initial_values_ds, iv_mapping  # <-- PASS NEW ARGS
+            initial_values_ds, iv_mapping,
+            fixed_overrides
         )
 
         if nested_data is None:

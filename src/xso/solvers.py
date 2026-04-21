@@ -7,6 +7,8 @@ import math
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 
+from .model import return_dim_ndarray
+
 
 def to_ndarray(value):
     """Helper function to always have at least 1d numpy array returned."""
@@ -928,14 +930,34 @@ class NumericalStabilitySolver(IVPSolver):
         for var_key, val in model.variables.items():
             val[...] = state_dict[var_key]
 
-        # Set fluxes to zeros (from FSolver)
-        for flux_key, val in model.flux_values.items():
+        # Build state dict at steady state (mirrors Model.unpack_flat_state)
+        full_ss = np.concatenate([
+            [model.time[-1]],
+            y_steady,
+            [v for val in self.flux_init.values() for v in val.ravel()]
+        ])
+        state_ss = model.unpack_flat_state(full_ss)
+        forcing_ss = {k: f(model.time[-1]) for k, f in model.forcing_func.items()}
+
+        # Evaluate each flux at steady state, same order/update logic as model_function
+        flux_ss = {}
+        for flx_label, flux in model.fluxes.items():
+            val = return_dim_ndarray(flux(state=state_ss,
+                                          parameters=model.parameters,
+                                          forcings=forcing_ss))
+            flux_ss[flx_label] = val
+            if flx_label in state_ss:
+                state_ss[flx_label] = val
+
+        # Write into flux storage, broadcast over time
+        for flux_key, storage in model.flux_values.items():
+            ss_val = flux_ss[flux_key]
             dims = model.full_model_dims[flux_key]
             if dims:
                 shape = (dims, n_time) if isinstance(dims, int) else (*dims, n_time)
-                val[...] = np.zeros(shape)
+                storage[...] = np.broadcast_to(ss_val[..., None], shape)
             else:
-                val[...] = np.zeros(n_time)
+                storage[...] = np.broadcast_to(np.asarray(ss_val).ravel(), (n_time,))
 
     def _numerical_jacobian(self, f, y_steady, eps=1e-8):
         """
