@@ -15,44 +15,64 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # Global variables (must be defined outside functions for multiprocessing)
 _global_model = None
 _global_model_setup = None
+_global_postprocess = None
+_global_postprocess_kwargs = {}
 
 
-def _validate_model_loading(module_name, model_name_str, model_setup_name_str):
+def _validate_model_loading(module_name, model_name_str, model_setup_name_str,
+                            postprocess_name=None):
     """
     Performs a pre-flight check in the main process to ensure
-    the model and setup objects can be loaded before starting workers.
+    the model, setup, and (optionally) postprocess callable can be
+    loaded before starting workers.
 
-    Raises ImportError or AttributeError if loading fails.
+    Raises ImportError, AttributeError, or TypeError if loading fails.
     """
     try:
         model_module = importlib.import_module(module_name)
 
-        # Test-load the model
         try:
             getattr(model_module, model_name_str)
         except AttributeError as e:
-            print(f"\n[FATAL PRE-CHECK ERROR] Failed to find model object '{model_name_str}' in '{module_name}.py'.")
-            # Try to find suggestions
-            suggestions = [o for o in dir(model_module) if 'model' in o.lower() and not o.startswith('__')]
+            print(f"\n[FATAL PRE-CHECK ERROR] Failed to find model object "
+                  f"'{model_name_str}' in '{module_name}.py'.")
+            suggestions = [o for o in dir(model_module)
+                           if 'model' in o.lower() and not o.startswith('__')]
             if suggestions:
                 print(f"Did you mean one of these? {suggestions}")
-            raise e  # Re-raise to stop execution
+            raise e
 
-        # Test-load the model_setup
         try:
             getattr(model_module, model_setup_name_str)
         except AttributeError as e:
-            print(
-                f"\n[FATAL PRE-CHECK ERROR] Failed to find setup object '{model_setup_name_str}' in '{module_name}.py'.")
-            # Try to find suggestions
-            suggestions = [o for o in dir(model_module) if 'setup' in o.lower() and not o.startswith('__')]
+            print(f"\n[FATAL PRE-CHECK ERROR] Failed to find setup object "
+                  f"'{model_setup_name_str}' in '{module_name}.py'.")
+            suggestions = [o for o in dir(model_module)
+                           if 'setup' in o.lower() and not o.startswith('__')]
             if suggestions:
                 print(f"Did you mean one of these? {suggestions}")
-            raise e  # Re-raise to stop execution
+            raise e
+
+        if postprocess_name is not None:
+            try:
+                pp = getattr(model_module, postprocess_name)
+            except AttributeError as e:
+                print(f"\n[FATAL PRE-CHECK ERROR] Failed to find postprocess "
+                      f"callable '{postprocess_name}' in '{module_name}.py'.")
+                suggestions = [o for o in dir(model_module)
+                               if 'postprocess' in o.lower() or 'avg' in o.lower()
+                               and not o.startswith('__')]
+                if suggestions:
+                    print(f"Did you mean one of these? {suggestions}")
+                raise e
+            if not callable(pp):
+                raise TypeError(
+                    f"'{postprocess_name}' in '{module_name}' is not callable."
+                )
 
     except ImportError as e:
-        # --- MODIFIED ERROR BLOCK ---
-        print(f"\n[FATAL PRE-CHECK ERROR] Failed to import model file: '{module_name}.py'.")
+        print(f"\n[FATAL PRE-CHECK ERROR] Failed to import model file: "
+              f"'{module_name}.py'.")
         print(f"Details: {e}")
 
         print("\n--- 💡 Debugging Import Error ---")
@@ -70,11 +90,11 @@ def _validate_model_loading(module_name, model_name_str, model_setup_name_str):
 
         except Exception as debug_e:
             print(f"(Could not retrieve full debug info: {debug_e})")
-        # --- END OF MODIFICATION ---
-        raise e  # Re-raise to stop execution
+        raise e
 
     except Exception as e:
-        print(f"\n[FATAL PRE-CHECK ERROR] An unexpected error occurred while loading '{module_name}'.")
+        print(f"\n[FATAL PRE-CHECK ERROR] An unexpected error occurred while "
+              f"loading '{module_name}'.")
         print(f"Details: {e}")
         raise e
 
@@ -91,39 +111,54 @@ def _validate_fixed_overrides(fixed_overrides, scan_param_names):
         )
 
 
-def _worker_initializer(module_name, model_name_str, model_setup_name_str):
+def _worker_initializer(module_name, model_name_str, model_setup_name_str,
+                        postprocess_name=None, postprocess_kwargs=None):
     """Initializes a worker process for multiprocessing.
 
-    Dynamically imports the model and model_setup objects from the given
-    module name and stores them in the worker's global scope
-    (`_global_model`, `_global_model_setup`). This ensures each worker
-    process has access to the model without serializing it.
+    Dynamically imports the model, model_setup, and (optionally) a
+    postprocess callable from the given module, storing them in the
+    worker's global scope.
 
     Parameters
     ----------
     module_name : str
-        The name of the Python module (file) that contains the
-        model and model_setup objects.
     model_name_str : str
-        The string name of the model object to load (e.g., 'model').
     model_setup_name_str : str
-        The string name of the model_setup object to load (e.g., 'model_setup_ivp').
+    postprocess_name : str or None, optional
+        Name of a callable in ``module_name`` with signature
+        ``(ds, **kwargs) -> xr.Dataset`` applied to each run's output
+        before it leaves the worker. If None, no post-processing.
+    postprocess_kwargs : dict or None, optional
+        Keyword arguments passed to the postprocess callable on every
+        call. Set once per worker.
     """
-    global _global_model
-    global _global_model_setup
+    global _global_model, _global_model_setup
+    global _global_postprocess, _global_postprocess_kwargs
 
     try:
         model_module = importlib.import_module(module_name)
 
-        # Use getattr to dynamically fetch attributes by their string names
         _global_model = getattr(model_module, model_name_str)
         _global_model_setup = getattr(model_module, model_setup_name_str)
 
+        if postprocess_name is not None:
+            pp = getattr(model_module, postprocess_name)
+            if not callable(pp):
+                raise TypeError(
+                    f"'{postprocess_name}' in '{module_name}' is not callable."
+                )
+            _global_postprocess = pp
+        else:
+            _global_postprocess = None
+        _global_postprocess_kwargs = postprocess_kwargs or {}
+
     except Exception as e:
-        # Updated error message for better debugging
-        print(f"FATAL ERROR: Worker failed to initialize model/setup from '{module_name}'.")
-        print(f"Attempted to load: model='{model_name_str}', setup='{model_setup_name_str}'.")
-        print(f"Check that these objects exist in your script. Details: {e}", flush=True)
+        print(f"FATAL ERROR: Worker failed to initialize from '{module_name}'.")
+        extra = f", postprocess='{postprocess_name}'" if postprocess_name else ""
+        print(f"Attempted to load: model='{model_name_str}', "
+              f"setup='{model_setup_name_str}'{extra}.")
+        print(f"Check that these objects exist in your script. Details: {e}",
+              flush=True)
         raise e
 
 
@@ -151,23 +186,16 @@ def _scalarize_param_for_coord(param_val):
 def _run_model_scan_point(task_data):
     """Executes a single simulation run within a worker process.
 
-    Retrieves the model from the worker's global scope. It then updates
-    the model's input variables with the parameters from `task_data`
-    and executes the simulation. The scan parameters are added to the
-    output Dataset as coordinates, and the 'time' coordinate is standardized.
-
-    Parameters
-    ----------
-    task_data : dict
-        A dictionary containing the task information. Must have a
-        key `'scan_param_dict'` which holds another dictionary
-        mapping parameter names to their values for this specific run.
+    Runs the solver, applies scan-param coordinates, standardizes the
+    time coordinate, and (if configured) applies the user postprocess
+    hook.
 
     Returns
     -------
-    xarray.Dataset
-        The result of the single model run, with scan parameters
-        as coordinates.
+    xarray.Dataset or None
+        The (possibly post-processed) run output, or ``None`` if either
+        the solve or the postprocess raised an exception. A ``None``
+        sentinel causes the unpacking stage to fill the cell with NaN.
     """
     scan_param_dict = task_data['scan_param_dict']
 
@@ -177,23 +205,32 @@ def _run_model_scan_point(task_data):
     if model is None or model_setup is None:
         raise RuntimeError("Model objects were not initialized in this worker process.")
 
-    # Run the Model: Update variables with the scan point and execute
-    with model:
-        model_out = model_setup.xsimlab.update_vars(
-            input_vars=scan_param_dict
-        ).xsimlab.run()
+    try:
+        with model:
+            model_out = model_setup.xsimlab.update_vars(
+                input_vars=scan_param_dict
+            ).xsimlab.run()
+    except Exception as e:
+        print(f"[WARNING] Solver run failed for scan_param_dict={scan_param_dict}. "
+              f"Cell will be NaN-filled. Details: {e}", flush=True)
+        return None
 
-    # Ensure all SCALAR scan parameters are added to the output coordinates
-    # This avoids adding the non-scalar array, which causes the name conflict.
     scalar_coords = {
         p_name: p_value for p_name, p_value in scan_param_dict.items()
         if np.isscalar(p_value)
     }
     model_out = model_out.assign_coords(scalar_coords)
 
-    # Post-processing: Standardize time coordinate for clean merging
     if 'time' in model_out.coords:
         model_out['time'] = model_out.time.round(9)
+
+    if _global_postprocess is not None:
+        try:
+            model_out = _global_postprocess(model_out, **_global_postprocess_kwargs)
+        except Exception as e:
+            print(f"[WARNING] Postprocess failed for scan_param_dict={scan_param_dict}. "
+                  f"Cell will be NaN-filled. Details: {e}", flush=True)
+            return None
 
     return model_out
 
@@ -243,41 +280,49 @@ def _generate_iterable_tasks_1d(parameter, par_range,
     return tasks
 
 
+def _nan_template_like(ds):
+    """Return a copy of ``ds`` with all numeric data variables replaced by NaN.
+
+    Non-numeric variables (string labels, object dtype) are preserved as-is
+    — they encode structural/metadata info that is the same across cells.
+    """
+    out = ds.copy(deep=False)
+    for name in list(out.data_vars):
+        da = out[name]
+        if np.issubdtype(da.dtype, np.number):
+            out[name] = xr.DataArray(
+                np.full(da.shape, np.nan, dtype=float),
+                coords=da.coords, dims=da.dims, attrs=da.attrs,
+            )
+    return out
+
+
 def _unpack_par_scan_1d(iterable_tasks, data):
     """Combines the results from a 1D parameter scan into a single Dataset.
 
-    Takes the list of completed tasks and the corresponding list of
-    `xarray.Dataset` results. It assigns the scan parameter as a
-    new coordinate and dimension for each dataset and then merges
-    them all using `xr.combine_by_coords`.
-
-    Parameters
-    ----------
-    iterable_tasks : list
-        The list of task dictionaries that was used to generate the runs.
-    data : list
-        The list of `xarray.Dataset` objects returned by the worker processes.
-
-    Returns
-    -------
-    xarray.Dataset
-        A single Dataset containing all results combined along
-        the new parameter dimension.
+    ``None`` entries in ``data`` (failed cells) are replaced with a
+    NaN-filled Dataset that matches the shape of the first successful
+    cell, then re-coordinated so ``combine_by_coords`` aligns them.
     """
     if not iterable_tasks or not data:
         return xr.Dataset()
 
-    # Determine the scan parameter name from the first task
     first_dict = iterable_tasks[0]['scan_param_dict']
     scan_param_name = list(first_dict.keys())[0]
 
+    template = next((d for d in data if d is not None), None)
+    if template is None:
+        print("[WARNING] All scan cells failed; returning empty Dataset.")
+        return xr.Dataset()
+
     dat_out = []
     for dat, task in zip(data, iterable_tasks):
+        if dat is None:
+            dat = _nan_template_like(template)
         scan_value = task['scan_param_dict'][scan_param_name]
-
-        # Assign the scan value as a coordinate and expand the dimension
         dat_out.append(
-            dat.assign_coords({scan_param_name: scan_value}).expand_dims(scan_param_name)
+            dat.assign_coords({scan_param_name: scan_value})
+               .expand_dims(scan_param_name)
         )
 
     return xr.combine_by_coords(dat_out)
@@ -334,46 +379,37 @@ def _generate_iterable_tasks_2d(par1, par_range1, par2, par_range2,
 
 
 def _unpack_par_scan_2d(datasets):
-    """Combines the nested results from a 2D parameter scan.
+    """Combines the nested results from a 2D parameter scan into a Dataset.
 
-    Takes the nested list of results (where each item corresponds
-    to an outer loop value and contains a list of inner loop datasets).
-    It iterates through both loops, assigns the two scan parameters
-    as coordinates and dimensions, and combines everything into a
-    single 2D `xarray.Dataset`.
-
-    Parameters
-    ----------
-    datasets : list
-        The nested list of results returned by `_run_inner_scan_with_progress`,
-        matching the structure from `_generate_iterable_tasks_2d`.
-
-    Returns
-    -------
-    xarray.Dataset
-        A single Dataset containing all 2D scan results.
+    ``None`` inner entries (failed cells) are replaced with a NaN-filled
+    template built from the first successful cell found in any inner list.
     """
-    dats_out = []
+    template = None
+    for _, _, _, inner_results_list in datasets:
+        for _, ds in inner_results_list:
+            if ds is not None:
+                template = ds
+                break
+        if template is not None:
+            break
 
-    # Outer loop: Iterates over the first parameter (p1)
-    # 'inner_datasets' is now a list of (val2, ds) tuples
+    if template is None:
+        print("[WARNING] All scan cells failed; returning empty Dataset.")
+        return xr.Dataset()
+
+    dats_out = []
     for par1, val1, par2, inner_results_list in datasets:
         dat_out = []
-
-        # Get a scalar coordinate value for P1
         scalar_val1 = _scalarize_param_for_coord(val1)
 
-        # Inner loop: Iterates over the second parameter (p2)
-        for val2, ds in inner_results_list:  # Unpack the (val2, ds) tuple
-
-            # Get a scalar coordinate value for P2
+        for val2, ds in inner_results_list:
+            if ds is None:
+                ds = _nan_template_like(template)
             scalar_val2 = _scalarize_param_for_coord(val2)
-
-            # Combine the P1 and P2 coordinates and create the dimensions
             dat_out.append(
                 ds.assign_coords({par1: scalar_val1, par2: scalar_val2})
-                .expand_dims(par1)
-                .expand_dims(par2)
+                  .expand_dims(par1)
+                  .expand_dims(par2)
             )
 
         data_combined_inner = xr.combine_by_coords(dat_out)
@@ -422,12 +458,13 @@ def _run_inner_scan_with_progress(task_tuple):
     return (par1, val1, par2, inner_results)
 
 
-def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2, param_values2, processes,
+def _run_2d_parscan_core(model_file_name, param_name, param_values,
+                         param_name2, param_values2, processes,
                          model_name, model_setup_name,
-                         initial_values_ds, iv_mapping, fixed_overrides):  # <-- NEW ARGS
+                         initial_values_ds, iv_mapping, fixed_overrides,
+                         postprocess_name=None, postprocess_kwargs=None):
     """Manages the core execution and progress reporting for a 2D scan (solve_ivp)."""
 
-    # Tasks for the outer parameter (P1)
     outer_tasks = _generate_iterable_tasks_2d(
         param_name, param_values, param_name2, param_values2,
         initial_values_ds, iv_mapping,
@@ -435,7 +472,6 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
     )
     n_outer_points = len(param_values)
 
-    # Storage for results and timing
     nested_data = []
     start = tm.time()
 
@@ -445,22 +481,18 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values, param_name2,
     print(f"Total points: {n_outer_points * len(param_values2)}.")
 
     try:
-        # Start Pool for the outer (P1) parallel scan
         with Pool(
                 processes=processes,
                 initializer=_worker_initializer,
-                initargs=(model_file_name, model_name, model_setup_name,)
+                initargs=(model_file_name, model_name, model_setup_name,
+                          postprocess_name, postprocess_kwargs,)
         ) as p:
 
-            # Use p.imap_unordered for better progress tracking
-            # This calls the original _run_inner_scan_with_progress
             results_iterator = p.imap_unordered(_run_inner_scan_with_progress, outer_tasks)
 
-            # --- Progress Tracking Loop ---
             for i, result in enumerate(results_iterator, start=1):
                 nested_data.append(result)
 
-                # Print progress for the outer loop
                 p1_name = result[0]
                 p1_val = result[1]
 
@@ -482,19 +514,44 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     param_name2=None, param_values2=None,
                     model_name='model', model_setup_name='model_setup',
                     initial_values_ds=None, iv_mapping=None,
-                    fixed_overrides=None):
+                    fixed_overrides=None,
+                    postprocess_name=None, postprocess_kwargs=None):
     """
     Executes a 1D or 2D parallel parameter scan (using solve_ivp).
 
-    Can optionally be initialized from a dataset of steady states.
-    ... (rest of docstring) ...
+    Parameters
+    ----------
+    ... (existing) ...
+    postprocess_name : str or None, optional
+        Name of a callable in the user's model module applied to each
+        run's output Dataset inside the worker, before the result is
+        pickled back to the parent. Signature:
+        ``postprocess(ds, **kwargs) -> xr.Dataset``. Typical use is to
+        reduce the time dimension (e.g. averaging over a steady-state
+        window) so large time series do not cross the process boundary.
+        A canned ``avg_tail`` implementation is provided in
+        ``xso.parscans``; re-export it from your model file
+        (``from xso.parscans import avg_tail``) to reference
+        it by name here.
+    postprocess_kwargs : dict or None, optional
+        Keyword arguments forwarded to the postprocess callable on every
+        invocation. Set once per worker at pool init.
+
+    Failed cells (solver exception, postprocess exception, or numerical
+    blow-up producing NaN-filled output) are returned as NaN-filled
+    sentinels with the same structure as successful cells, so one bad
+    cell does not abort the whole scan.
     """
 
-    # --- Pre-flight check (unchanged) ---
     print(f"--- Starting Parallel Scan (solve_ivp) ---")
-    print(f"Validating model '{model_name}' and setup '{model_setup_name}' from '{model_file_name}'...")
+    print(f"Validating model '{model_name}' and setup '{model_setup_name}' "
+          f"from '{model_file_name}'"
+          + (f" with postprocess '{postprocess_name}'"
+             if postprocess_name else "")
+          + "...")
     try:
-        _validate_model_loading(model_file_name, model_name, model_setup_name)
+        _validate_model_loading(model_file_name, model_name, model_setup_name,
+                                postprocess_name=postprocess_name)
         print("Validation successful. Proceeding with scan.")
     except Exception:
         print("Scan aborted due to failed pre-flight check.")
@@ -510,7 +567,6 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
     _validate_fixed_overrides(fixed_overrides, scan_params)
 
     if param_name2 is None:
-        # --- 1D Scan Logic ---
         iter_scan = _generate_iterable_tasks_1d(
             param_name, param_values,
             initial_values_ds, iv_mapping,
@@ -518,7 +574,8 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         )
         n_points = len(param_values)
 
-        print(f"Starting 1D parallel scan of '{model_file_name}' over {n_points} points using {processes} workers...")
+        print(f"Starting 1D parallel scan of '{model_file_name}' over "
+              f"{n_points} points using {processes} workers...")
 
         start = tm.time()
 
@@ -526,9 +583,9 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             with Pool(
                     processes=processes,
                     initializer=_worker_initializer,
-                    initargs=(model_file_name, model_name, model_setup_name,)
+                    initargs=(model_file_name, model_name, model_setup_name,
+                              postprocess_name, postprocess_kwargs,)
             ) as p:
-                # Use the original _run_model_scan_point for IVP
                 data = p.map(_run_model_scan_point, iter_scan)
 
         except Exception as e:
@@ -542,7 +599,6 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         return out_ds
 
     else:
-        # --- 2D Scan Logic ---
         if param_values2 is None:
             raise ValueError("param_values2 must be provided when param_name2 is specified.")
 
@@ -552,12 +608,13 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             model_name, model_setup_name,
             initial_values_ds, iv_mapping,
             fixed_overrides,
+            postprocess_name=postprocess_name,
+            postprocess_kwargs=postprocess_kwargs,
         )
 
         if nested_data is None:
             return None
 
-        # 3. Combine Results and Report
         out_ds = _unpack_par_scan_2d(nested_data)
         print(f"\n2D Scan complete. Total Time taken: {round(run_time, 5)} seconds.")
         return out_ds
@@ -891,3 +948,56 @@ def run_xso_stabilityscan(model_file_name, param_name, param_values, processes=2
         out_ds = _unpack_par_scan_2d(nested_data)
         print(f"\n2D Stability Scan complete. Total Time taken: {round(run_time, 5)} seconds.")
         return out_ds
+
+
+
+"""Canned postprocess hooks for use with ``run_xso_parscan``.
+
+Each hook has signature ``(ds, **kwargs) -> xr.Dataset`` and is meant to
+be referenced by name via the ``postprocess_name`` argument of
+``run_xso_parscan``. To use one, re-export it from your model setup
+module so the worker can locate it by attribute lookup::
+
+    # cariaco_ssm_setup.py
+    from xso.parscans_postprocess import avg_tail
+
+    # run_2d_scan.py
+    run_xso_parscan(
+        model_file_name='cariaco_ssm_setup',
+        ...,
+        postprocess_name='avg_tail',
+        postprocess_kwargs={'avg_window': 1000},
+    )
+"""
+
+
+def avg_tail(ds, avg_window=1000):
+    """Reduce every time-dimensioned variable to its mean over the last
+    ``avg_window`` time steps, keeping ``time`` as a length-1 dim.
+
+    Variables without a ``time`` dim (including string/object-dtype
+    metadata variables from xsimlab input storage) are passed through
+    unchanged.
+    """
+    if 'time' not in ds.dims:
+        return ds
+
+    final_t = ds['time'].values[-1]
+
+    vars_with_time = [v for v in ds.data_vars if 'time' in ds[v].dims]
+    vars_without_time = [v for v in ds.data_vars if 'time' not in ds[v].dims]
+
+    if vars_with_time:
+        tail = ds[vars_with_time].isel(time=slice(-avg_window, None))
+        reduced = tail.mean('time', keep_attrs=True)
+        reduced = reduced.expand_dims({'time': [final_t]})
+    else:
+        reduced = xr.Dataset()
+
+    if vars_without_time:
+        out = xr.merge([reduced, ds[vars_without_time]])
+    else:
+        out = reduced
+
+    out.attrs = ds.attrs
+    return out
