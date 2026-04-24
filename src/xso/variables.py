@@ -12,7 +12,7 @@ class XSOVarType(Enum):
 
 
 def variable(foreign=False, flux=None, negative=False, list_input=False,
-             dims=None, description='', attrs={}):
+             dims=None, description='', attrs=None):
     """Create a state variable.
 
     This can be a local state variable for the component, or a reference to a state variable
@@ -50,7 +50,8 @@ def variable(foreign=False, flux=None, negative=False, list_input=False,
         Dictionnary of additional metadata (e.g., standard_name,
         units, math_symbol...).
     """
-    attrs.update({'xso_store_out': True})
+    attrs = dict(attrs) if attrs is not None else {}
+    attrs['xso_store_out'] = True
 
     metadata = {
         "var_type": XSOVarType.VARIABLE,
@@ -62,12 +63,11 @@ def variable(foreign=False, flux=None, negative=False, list_input=False,
         "attrs": attrs,
         "description": description,
     }
-
     return attr.attrib(metadata=metadata)
 
 
 def forcing(foreign=False,
-            setup_func=None, dims=(), description='', attrs={}):
+            setup_func=None, dims=(), description='', attrs=None):
     """Create a forcing variable.
 
     This can be a local forcing variable for the component, or a reference to a forcing variable
@@ -98,14 +98,15 @@ def forcing(foreign=False,
         units, math_symbol...).
     """
 
-    attrs.update({'xso_store_out': True})
+    attrs = dict(attrs) if attrs is not None else {}
+    attrs['xso_store_out'] = True
 
     metadata = {
         "var_type": XSOVarType.FORCING,
         "foreign": foreign,
         "setup_func": setup_func,
         "dims": dims,
-        "attrs": attrs,
+        "attrs":  attrs,
         "description": description,
     }
 
@@ -157,14 +158,14 @@ def parameter(foreign=False, setup_func=None, dims=(), description='', attrs=Non
         "foreign": foreign,
         "setup_func": setup_func,
         "dims": dims,
-        "attrs": attrs if attrs is not None else {},
+        "attrs": dict(attrs) if attrs is not None else {},
         "description": description,
     }
 
     return attr.attrib(metadata=metadata)
 
 
-def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description='', attrs={}):
+def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description='', attrs=None):
     """Create a flux function.
 
     This is a function decorator that registers a method within a component
@@ -200,16 +201,15 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
     """
 
     def create_attrib(function):
-
-        attrs.update({'xso_store_out': True})
-
+        _attrs = dict(attrs) if attrs is not None else {}
+        _attrs['xso_store_out'] = True
         metadata = {
             "var_type": XSOVarType.FLUX,
             "flux_func": function,
             "group": group,
             "group_to_arg": group_to_arg,
             "dims": dims,
-            "attrs": attrs,
+            "attrs": _attrs,
             "description": description,
         }
         return attr.attrib(metadata=metadata)
@@ -248,7 +248,7 @@ def index(foreign=False, dims=(), description='', attrs=None):
         "var_type": XSOVarType.INDEX,
         "foreign": foreign,
         "dims": dims,
-        "attrs": attrs or {},
+        "attrs": dict(attrs) if attrs is not None else {},
         "description": description,
     }
 

@@ -416,6 +416,10 @@ def _initialize_parameter_setup_funcs(cls, param_setup_dict, vars_dict):
     """Parses xso.parameter variables with a setup_func, computes their values,
     and registers them with the model backend.
 
+    Each argument of the setup_func must correspond to a variable declared
+    on the component. This prevents silent resolution of argument names
+    to unrelated component attributes (e.g. 'core', 'label').
+
     For each setup_func argument, the value is resolved as follows:
       - If the argument name matches a foreign xso.parameter declared on this
         component, the value is dereferenced from cls.core.model.parameters
@@ -436,10 +440,20 @@ def _initialize_parameter_setup_funcs(cls, param_setup_dict, vars_dict):
             if arg == "self":
                 continue
 
-            # Is this arg a foreign parameter on the component?
-            arg_var = vars_dict.get(arg)
-            if (arg_var is not None
-                    and arg_var.metadata.get('var_type') is XSOVarType.PARAMETER
+            if arg not in vars_dict:
+                raise ValueError(
+                    f"Parameter setup_func '{param_setup_func.__name__}' on "
+                    f"component '{cls.label}' declares argument '{arg}', but "
+                    f"no XSO variable with that name is declared on the "
+                    f"component. Declared variables are: "
+                    f"{sorted(vars_dict.keys())}. Setup_func arguments must "
+                    f"match the names of xso.variable, xso.parameter, "
+                    f"xso.forcing, or xso.index declarations on the same "
+                    f"component."
+                )
+
+            arg_var = vars_dict[arg]
+            if (arg_var.metadata.get('var_type') is XSOVarType.PARAMETER
                     and arg_var.metadata.get('foreign') is True):
                 foreign_label = getattr(cls, arg)
                 try:
@@ -460,9 +474,16 @@ def _initialize_parameter_setup_funcs(cls, param_setup_dict, vars_dict):
         cls.core.add_parameter(label=cls.label + '_' + var, value=value)
 
 
-def _initialize_forcings(cls, forcing_dict):
+def _initialize_forcings(cls, forcing_dict, vars_dict):
     """Parses xso.forcing variables and methods defined in xso.component decorated class
     and registers them with the model backend.
+
+    Each argument of a forcing setup function must correspond to a variable
+    declared on the component (xso.variable / xso.parameter / xso.forcing /
+    xso.index). This prevents silent failures where a setup_func argument
+    name accidentally matches some unrelated attribute on the component
+    class (e.g. 'core', 'label') and would otherwise be resolved via getattr
+    to produce mysterious inputs.
     """
     for var, forc_input_func in forcing_dict.items():
         forc_label = getattr(cls, var + '_label')
@@ -471,8 +492,20 @@ def _initialize_forcings(cls, forcing_dict):
 
         input_args = defaultdict()
         for arg in argspec.args:
-            if arg != "self":
-                input_args[arg] = getattr(cls, arg)
+            if arg == "self":
+                continue
+            if arg not in vars_dict:
+                raise ValueError(
+                    f"Forcing setup_func '{forc_input_func.__name__}' on "
+                    f"component '{cls.label}' declares argument '{arg}', but "
+                    f"no XSO variable with that name is declared on the "
+                    f"component. Declared variables are: "
+                    f"{sorted(vars_dict.keys())}. Setup_func arguments must "
+                    f"match the names of xso.variable, xso.parameter, "
+                    f"xso.forcing, or xso.index declarations on the same "
+                    f"component."
+                )
+            input_args[arg] = getattr(cls, arg)
 
         forc_func = forc_input_func(cls, **input_args)
         setattr(cls, var + '_value',
@@ -647,7 +680,7 @@ def component(cls=None):
 
             _initialize_fluxes(self, vars_dict)
 
-            _initialize_forcings(self, forcing_dict)
+            _initialize_forcings(self, forcing_dict, vars_dict)
 
             _initialize_indexes(self, index_dict)
 
