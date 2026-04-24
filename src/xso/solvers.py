@@ -1259,7 +1259,7 @@ class StepwiseSolver(SolverABC):
             if model.full_model_dims[key]:
                 val[..., self.time_index] = val[..., self.time_index - 1] + state_dict[key] * time_step
             else:
-                val[self.time_index] = val[self.time_index - 1] + state_dict[key] * time_step
+                val[self.time_index] = np.asarray(val[self.time_index - 1] + state_dict[key] * time_step).item()
 
         for key, val in model.flux_values.items():
             if model.full_model_dims[key]:
