@@ -1148,7 +1148,7 @@ class StepwiseSolver(SolverABC):
             _dims = None
             full_dims = (np.size(model_time),)
             array_out = np.zeros(full_dims)
-            array_out[0] = value
+            array_out[0] = np.asarray(value).item()
         elif len(np.shape(value)) == 1:
             _dims = np.size(value)
             full_dims = (_dims, np.size(model_time))

@@ -579,7 +579,20 @@ def component(cls=None):
         new_cls = _create_new_cls(cls, _create_xsimlab_var_dict(vars_dict), init_stage_automated)
 
         def flux_decorator(self, func):
-            """XSO flux function decorator to unpack arguments"""
+            """XSO flux function decorator to unpack arguments.
+
+            Builds the full dict of available inputs (state variables,
+            parameters, forcings, etc.) and then filters it down to only
+            those names declared in the flux function's signature. This
+            means a flux only needs to list the inputs it actually uses.
+
+            If the flux declares ``**kwargs`` (VAR_KEYWORD), no filtering
+            is applied — it will receive every available input.
+            """
+            _argspec = inspect.getfullargspec(func)
+            _accepted = set(_argspec.args) - {'self'}
+            _accepted.update(_argspec.kwonlyargs)
+            _accepts_var_keyword = _argspec.varkw is not None
 
             @wraps(func)
             def unpack_args(**kwargs):
@@ -612,6 +625,9 @@ def component(cls=None):
 
                 for f_dict in self.flux_input_args['forcs']:
                     input_args[f_dict['var']] = forcings[f_dict['label']]
+
+                if not _accepts_var_keyword:
+                    input_args = {k: v for k, v in input_args.items() if k in _accepted}
 
                 return func(self, **input_args)
 
