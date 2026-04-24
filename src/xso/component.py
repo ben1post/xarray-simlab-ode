@@ -131,11 +131,14 @@ def _make_xso_parameter(label, variable):
     """Checks for type of variable defined and calls _convert_2_xsimlabvar function
     accordingly. Returns dict with label and xsimlab variable as key/value pairs.
 
-    Three cases:
+    Four cases:
       - foreign=True: emits a scalar label-reference variable (user supplies the
-        label of the source component's parameter via input_vars).
-      - setup_func is set: emits an intent='out' variable (user cannot supply a
-        value; the setup function is authoritative).
+        user-chosen label string of the source component's broadcast parameter
+        via input_vars).
+      - broadcast=True: emits a ``label + '_label'`` input slot (user-chosen
+        label string) in addition to the value slot.
+      - setup_func is set: emits an intent='out' variable (user cannot supply
+        a value; the setup function is authoritative).
       - default: emits a user-input parameter (unchanged legacy behavior).
     """
     xs_var_dict = defaultdict()
@@ -144,6 +147,12 @@ def _make_xso_parameter(label, variable):
         xs_var_dict[label] = _convert_2_xsimlabvar(
             var=variable, var_dims=(),
             description_label='label reference / ')
+    elif variable.metadata.get('broadcast') is True:
+        xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(
+            var=variable, var_dims=(),
+            description_label='broadcast label / ')
+        xs_var_dict[label] = _convert_2_xsimlabvar(
+            var=variable, description_label='parameter / ')
     elif variable.metadata.get('setup_func') is not None:
         xs_var_dict[label] = _convert_2_xsimlabvar(
             var=variable, intent='out',
@@ -193,30 +202,65 @@ def _make_xso_flux(label, variable):
 def _make_xso_index(label, variable):
     """Checks for type of variable defined and calls _convert_2_xsimlabvar function
     accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+
+    Two cases:
+      - as_parameter=False (default): emits an xs.index keyed by the attribute
+        name (which must equal the dim name, per xarray-simlab). Plus an
+        ``_index`` input slot for the user-supplied array of labels.
+      - as_parameter=True: emits an xs.index keyed by the dim name, an
+        ``_index`` input slot keyed by the attribute name + '_index', a
+        ``_label`` input slot for the user-chosen broadcast label, and a
+        parameter slot keyed by the attribute name (so fluxes and setup
+        funcs on this component can read it as a regular parameter too).
     """
     xs_var_dict = defaultdict()
 
     description_label = 'index / '
-    # get variable metadata
     var_description = variable.metadata.get('description')
     if var_description:
         description_label = description_label + var_description
 
     var_dims = variable.metadata.get('dims')
-
     if var_dims is None:
-        raise ValueError("Argument dims is not supplied. Index variable requires passing the labels of dimension to 'dims' keyword.")
-
-    if label != var_dims:
-        raise ValueError("The variable name has to be the same as the dimension it labels. This is a requirement of xarray-simlab.")
+        raise ValueError(
+            "Argument dims is not supplied. Index variable requires passing "
+            "the labels of dimension to 'dims' keyword."
+        )
 
     if variable.metadata.get('attrs'):
         var_attrs = variable.metadata.get('attrs')
     else:
         var_attrs = {}
 
-    xs_var_dict[label] = xs.index(dims=var_dims, description=description_label, attrs=var_attrs)
-    xs_var_dict[label + '_index'] = _convert_2_xsimlabvar(var=variable, description_label='index / ')
+    as_parameter = variable.metadata.get('as_parameter', False)
+
+    if as_parameter is False:
+        if label != var_dims:
+            raise ValueError(
+                "The variable name has to be the same as the dimension it "
+                "labels. This is a requirement of xarray-simlab. "
+                "If you want a different variable name, set as_parameter=True "
+                "to opt into the split-name index+parameter pattern."
+            )
+        xs_var_dict[label] = xs.index(
+            dims=var_dims, description=description_label, attrs=var_attrs)
+        xs_var_dict[label + '_index'] = _convert_2_xsimlabvar(
+            var=variable, description_label='index / ')
+    else:
+        # Split semantics: xs.index is keyed by dim name, parameter/label
+        # slots are keyed by the attribute name.
+        _dim_name = var_dims if isinstance(var_dims, str) else var_dims[0]
+        xs_var_dict[_dim_name] = xs.index(
+            dims=var_dims, description=description_label, attrs=var_attrs)
+        xs_var_dict[label + '_index'] = _convert_2_xsimlabvar(
+            var=variable, description_label='index / ')
+        xs_var_dict[label + '_label'] = _convert_2_xsimlabvar(
+            var=variable, var_dims=(),
+            description_label='broadcast label / ')
+        xs_var_dict[label] = _convert_2_xsimlabvar(
+            var=variable, intent='out',
+            description_label='parameter / ')
+
     return xs_var_dict
 
 
@@ -332,14 +376,47 @@ def _initialize_process_vars(cls, vars_dict):
                                           negative=flux_negative)
         elif var_type is XSOVarType.PARAMETER:
             if var.metadata.get('foreign') is True:
-                # Foreign reference: source component registered the value under its own
-                # label. Nothing to register here; flux and setup_func lookups will
-                # dereference via cls.core.model.parameters[foreign_label] at access time.
-                pass
+                # Foreign reference: user-chosen label string is stored on cls.key.
+                # Validate that what the user passed is a string and that it
+                # matches a registered broadcast parameter.
+                _label = getattr(cls, key)
+                if not isinstance(_label, str):
+                    raise TypeError(
+                        f"Foreign parameter '{key}' on component '{cls.label}' "
+                        f"expects a label STRING identifying a broadcast "
+                        f"parameter on another component, but received a value "
+                        f"of type {type(_label).__name__}: {_label!r}. "
+                        f"Pass the user-chosen label string (matching the "
+                        f"source-side ``_label`` input slot), not the value."
+                    )
+                if _label not in cls.core.model.parameters:
+                    available = sorted(cls.core.model.parameters.keys())
+                    raise KeyError(
+                        f"Foreign parameter '{key}' on component '{cls.label}' "
+                        f"references label {_label!r}, but no broadcast "
+                        f"parameter with that label is registered. Make sure "
+                        f"the source component declares its parameter with "
+                        f"broadcast=True and that the ``_label`` input slot "
+                        f"on the source side is set to {_label!r}. "
+                        f"Registered broadcast parameter labels: {available}."
+                    )
             elif var.metadata.get('setup_func') is not None:
                 # Value will be computed and registered by
-                # _initialize_parameter_setup_funcs, after local params are in place.
+                # _initialize_parameter_setup_funcs.
                 pass
+            elif var.metadata.get('broadcast') is True:
+                # Broadcast: register under the user-supplied label string, so
+                # other components can foreign-reference it.
+                _label = getattr(cls, key + '_label')
+                if not isinstance(_label, str):
+                    raise TypeError(
+                        f"Broadcast parameter '{key}' on component "
+                        f"'{cls.label}' expects a label STRING in its "
+                        f"``_label`` input slot, but received a value of type "
+                        f"{type(_label).__name__}: {_label!r}."
+                    )
+                _par_value = getattr(cls, key)
+                cls.core.add_parameter(label=_label, value=_par_value)
             else:
                 _par_value = getattr(cls, key)
                 cls.core.add_parameter(label=process_label + '_' + key, value=_par_value)
@@ -513,11 +590,35 @@ def _initialize_forcings(cls, forcing_dict, vars_dict):
 
 
 def _initialize_indexes(cls, index_dict):
-    """Initializes xso.index variables defined in xso.component decorated class."""
-    for var, val in index_dict.items():
-        # apply index value to XSO Index variable type
+    """Initializes xso.index variables defined in xso.component decorated class.
+
+    For indexes with as_parameter=True, also registers the array as a broadcast
+    parameter under a user-supplied label.
+    """
+    for var, variable in index_dict.items():
         index_value = getattr(cls, var + '_index')
-        setattr(cls, var, index_value)
+        as_parameter = variable.metadata.get('as_parameter', False)
+
+        if as_parameter is False:
+            setattr(cls, var, index_value)
+        else:
+            # xs.index is keyed by the dim name, which may differ from var
+            var_dims = variable.metadata.get('dims')
+            _dim_name = var_dims if isinstance(var_dims, str) else var_dims[0]
+            setattr(cls, _dim_name, index_value)
+
+            # Also populate the parameter side (keyed by var, i.e. attribute
+            # name) and register under the user-chosen broadcast label.
+            setattr(cls, var, index_value)
+            _label = getattr(cls, var + '_label')
+            if not isinstance(_label, str):
+                raise TypeError(
+                    f"Index '{var}' with as_parameter=True on component "
+                    f"'{cls.label}' expects a label STRING in its "
+                    f"``_label`` input slot, but received a value of type "
+                    f"{type(_label).__name__}: {_label!r}."
+                )
+            cls.core.add_parameter(label=_label, value=index_value)
 
 
 

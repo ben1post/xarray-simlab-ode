@@ -113,20 +113,25 @@ def forcing(foreign=False,
     return attr.attrib(metadata=metadata)
 
 
-def parameter(foreign=False, setup_func=None, dims=(), description='', attrs=None):
+def parameter(foreign=False, setup_func=None, broadcast=False,
+              dims=(), description='', attrs=None):
     """Create a parameter.
 
     This can be a local parameter for the component, a reference to a parameter
     initialized in another component (foreign=True), or a parameter whose value
     is computed once at initialization time by a setup function (setup_func).
 
-    The parameter can be of variable dimensionality.
+    By default parameters are component-private: they are accessible only to the
+    fluxes and setup functions of the component on which they are declared.
+    Setting broadcast=True on the source-side declaration exposes the parameter
+    for foreign access from other components via a user-chosen label string.
 
     Parameters
     ----------
     foreign : boolean, optional
         Defines whether the parameter is initialized and labeled in the component,
-        or is simply a reference to a parameter in another component.
+        or is simply a reference to a parameter in another component. A foreign
+        parameter must reference a broadcast=True parameter on some other component.
     setup_func : str, optional
         Name of a setup function defined in this component whose return value
         is used as the parameter value. The setup function is called once at
@@ -134,6 +139,12 @@ def parameter(foreign=False, setup_func=None, dims=(), description='', attrs=Non
         foreign references resolved. When a setup_func is provided, the user
         cannot supply this parameter's value via input_vars — the setup_func
         is authoritative. Cannot be combined with foreign=True.
+    broadcast : boolean, optional
+        If True, this parameter is exposed for foreign access from other
+        components under a user-supplied label string. The user must supply
+        the label via the ``_label`` input slot at model setup, mirroring how
+        xso.variable foreign references work. Default False (component-private).
+        Cannot be combined with foreign=True.
     dims : str or tuple or list, optional
         Dimension label(s) of the parameter. An empty tuple
         corresponds to a scalar variable (default), a string or a 1-length
@@ -152,11 +163,18 @@ def parameter(foreign=False, setup_func=None, dims=(), description='', attrs=Non
             "A parameter is either imported from another component (foreign=True) "
             "or computed locally (setup_func=...), not both."
         )
+    if foreign is True and broadcast is True:
+        raise ValueError(
+            "xso.parameter: foreign=True cannot be combined with broadcast=True. "
+            "A foreign parameter references a broadcast parameter declared on "
+            "another component; only the declaring (source) side uses broadcast=True."
+        )
 
     metadata = {
         "var_type": XSOVarType.PARAMETER,
         "foreign": foreign,
         "setup_func": setup_func,
+        "broadcast": broadcast,
         "dims": dims,
         "attrs": dict(attrs) if attrs is not None else {},
         "description": description,
@@ -220,20 +238,36 @@ def flux(flux_func=None, *, dims=(), group=None, group_to_arg=None, description=
     return create_attrib
 
 
-def index(foreign=False, dims=(), description='', attrs=None):
+def index(foreign=False, as_parameter=False, dims=(), description='', attrs=None):
     """Create an index.
 
-    This has to be a local index for the component.
-
-    The index can be of variable dimensionality.
+    An index labels a dimension in the output dataset. By default the index is
+    a pure labeling construct. Setting as_parameter=True additionally exposes
+    the index's values as a broadcast parameter, so that other components can
+    foreign-reference it as numeric data.
 
     Parameters
     ----------
     foreign : boolean, optional
-        Defines whether the parameter is initialized and labeled in the component,
-        or is simply a reference to a variable in another component.
+        Defines whether the index is initialized and labeled in the component,
+        or is simply a reference to an index in another component.
+    as_parameter : boolean, optional
+        If True, the index's values are additionally registered as a broadcast
+        parameter, foreign-referenceable from other components under a
+        user-supplied label string. The label is supplied at model setup via
+        the ``_label`` input slot, the same way xso.variable foreign references
+        work. Default False.
+
+        When as_parameter=True, the user-facing Python attribute name (the
+        variable name in the component class) becomes the parameter name.
+        The dimension the index labels is taken from the ``dims`` argument,
+        which can differ from the attribute name. This lets you write e.g.
+        ``phyto_esd = xso.index(dims='phyto', as_parameter=True, ...)``.
+
+        When as_parameter=False, the attribute name must equal the dim name,
+        matching xarray-simlab's requirement for index variables.
     dims : str or tuple or list, optional
-        Dimension label(s) of the forcing. An empty tuple
+        Dimension label(s) of the parameter. An empty tuple
         corresponds to a scalar variable (default), a string or a 1-length
         tuple corresponds to a 1-d variable and a n-length tuple corresponds to
         a n-d variable. A list of str or tuple items may also be provided if
@@ -247,6 +281,7 @@ def index(foreign=False, dims=(), description='', attrs=None):
     metadata = {
         "var_type": XSOVarType.INDEX,
         "foreign": foreign,
+        "as_parameter": as_parameter,
         "dims": dims,
         "attrs": dict(attrs) if attrs is not None else {},
         "description": description,
