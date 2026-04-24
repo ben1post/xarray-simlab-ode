@@ -112,11 +112,12 @@ def forcing(foreign=False,
     return attr.attrib(metadata=metadata)
 
 
-def parameter(foreign=False, dims=(), description='', attrs=None):
+def parameter(foreign=False, setup_func=None, dims=(), description='', attrs=None):
     """Create a parameter.
 
-    This can be a local parameter for the component, or a reference to a parameter
-    initialized in another component.
+    This can be a local parameter for the component, a reference to a parameter
+    initialized in another component (foreign=True), or a parameter whose value
+    is computed once at initialization time by a setup function (setup_func).
 
     The parameter can be of variable dimensionality.
 
@@ -124,9 +125,16 @@ def parameter(foreign=False, dims=(), description='', attrs=None):
     ----------
     foreign : boolean, optional
         Defines whether the parameter is initialized and labeled in the component,
-        or is simply a reference to a variable in another component.
+        or is simply a reference to a parameter in another component.
+    setup_func : str, optional
+        Name of a setup function defined in this component whose return value
+        is used as the parameter value. The setup function is called once at
+        model initialization, after local parameters have been registered and
+        foreign references resolved. When a setup_func is provided, the user
+        cannot supply this parameter's value via input_vars — the setup_func
+        is authoritative. Cannot be combined with foreign=True.
     dims : str or tuple or list, optional
-        Dimension label(s) of the forcing. An empty tuple
+        Dimension label(s) of the parameter. An empty tuple
         corresponds to a scalar variable (default), a string or a 1-length
         tuple corresponds to a 1-d variable and a n-length tuple corresponds to
         a n-d variable. A list of str or tuple items may also be provided if
@@ -137,11 +145,19 @@ def parameter(foreign=False, dims=(), description='', attrs=None):
         Dictionnary of additional metadata (e.g., standard_name,
         units, math_symbol...).
     """
+    if foreign is True and setup_func is not None:
+        raise ValueError(
+            "xso.parameter: foreign=True cannot be combined with setup_func. "
+            "A parameter is either imported from another component (foreign=True) "
+            "or computed locally (setup_func=...), not both."
+        )
+
     metadata = {
         "var_type": XSOVarType.PARAMETER,
         "foreign": foreign,
+        "setup_func": setup_func,
         "dims": dims,
-        "attrs": attrs or {},
+        "attrs": attrs if attrs is not None else {},
         "description": description,
     }
 

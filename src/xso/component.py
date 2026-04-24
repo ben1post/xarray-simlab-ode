@@ -130,9 +130,27 @@ def _make_xso_variable(label, variable):
 def _make_xso_parameter(label, variable):
     """Checks for type of variable defined and calls _convert_2_xsimlabvar function
     accordingly. Returns dict with label and xsimlab variable as key/value pairs.
+
+    Three cases:
+      - foreign=True: emits a scalar label-reference variable (user supplies the
+        label of the source component's parameter via input_vars).
+      - setup_func is set: emits an intent='out' variable (user cannot supply a
+        value; the setup function is authoritative).
+      - default: emits a user-input parameter (unchanged legacy behavior).
     """
     xs_var_dict = defaultdict()
-    xs_var_dict[label] = _convert_2_xsimlabvar(var=variable, description_label='parameter / ')
+
+    if variable.metadata.get('foreign') is True:
+        xs_var_dict[label] = _convert_2_xsimlabvar(
+            var=variable, var_dims=(),
+            description_label='label reference / ')
+    elif variable.metadata.get('setup_func') is not None:
+        xs_var_dict[label] = _convert_2_xsimlabvar(
+            var=variable, intent='out',
+            description_label='computed parameter / ')
+    else:
+        xs_var_dict[label] = _convert_2_xsimlabvar(
+            var=variable, description_label='parameter / ')
     return xs_var_dict
 
 
@@ -230,6 +248,23 @@ def _create_xsimlab_var_dict(cls_vars):
     return xs_var_dict
 
 
+def _create_parameter_setup_dict(cls, var_dict):
+    """Parses var_dict and extracts parameter setup functions.
+
+    Returns a dict mapping parameter variable name to its bound setup method,
+    for every xso.parameter that has setup_func defined.
+    """
+    param_setup_dict = defaultdict()
+
+    for key, var in var_dict.items():
+        if var.metadata.get('var_type') is XSOVarType.PARAMETER:
+            _param_setup_func = var.metadata.get('setup_func')
+            if _param_setup_func is not None:
+                param_setup_dict[key] = getattr(cls, _param_setup_func)
+
+    return param_setup_dict
+
+
 def _create_forcing_dict(cls, var_dict):
     """Parses var_dict and extracts forcing setup function"""
     forcings_dict = defaultdict()
@@ -296,11 +331,18 @@ def _initialize_process_vars(cls, vars_dict):
                         cls.core.add_flux(process_label=cls.label, var_label=_label, flux_label=flux_label,
                                           negative=flux_negative)
         elif var_type is XSOVarType.PARAMETER:
-            if var.metadata.get('foreign') is False:
+            if var.metadata.get('foreign') is True:
+                # Foreign reference: source component registered the value under its own
+                # label. Nothing to register here; flux and setup_func lookups will
+                # dereference via cls.core.model.parameters[foreign_label] at access time.
+                pass
+            elif var.metadata.get('setup_func') is not None:
+                # Value will be computed and registered by
+                # _initialize_parameter_setup_funcs, after local params are in place.
+                pass
+            else:
                 _par_value = getattr(cls, key)
                 cls.core.add_parameter(label=process_label + '_' + key, value=_par_value)
-            else:
-                raise Exception("Sorry, currently XSO does not support foreign=True for parameters.")
 
 
 def _create_flux_inputargs_dict(cls, vars_dict):
@@ -325,8 +367,11 @@ def _create_flux_inputargs_dict(cls, vars_dict):
 
         elif var_type is XSOVarType.PARAMETER:
             par_dim = var.metadata.get('dims')
-            # TODO: Implement foreign parameters here
-            input_arg_dict['pars'].append({'var': key, 'label': cls.label + '_' + key, 'dim': par_dim})
+            if var.metadata.get('foreign') is True:
+                par_label = getattr(cls, key)
+            else:
+                par_label = cls.label + '_' + key
+            input_arg_dict['pars'].append({'var': key, 'label': par_label, 'dim': par_dim})
 
         elif var_type is XSOVarType.FORCING:
             if var.metadata.get('foreign') is False:
@@ -365,6 +410,54 @@ def _initialize_fluxes(cls, vars_dict):
 
             setattr(cls, key + '_value',
                     cls.core.register_flux(label=label, flux=cls.flux_decorator(flux_func), dims=flux_dim))
+
+
+def _initialize_parameter_setup_funcs(cls, param_setup_dict, vars_dict):
+    """Parses xso.parameter variables with a setup_func, computes their values,
+    and registers them with the model backend.
+
+    For each setup_func argument, the value is resolved as follows:
+      - If the argument name matches a foreign xso.parameter declared on this
+        component, the value is dereferenced from cls.core.model.parameters
+        using the foreign label string stored on the component.
+      - Otherwise, the value is read directly via getattr(cls, arg), which
+        covers local parameters, local forcings, and any other attribute that
+        has been initialized by the time this runs.
+
+    Must be called AFTER _initialize_process_vars (so local params are in
+    model.parameters) and BEFORE _initialize_fluxes (so fluxes can see the
+    computed values during symbolic evaluation).
+    """
+    for var, param_setup_func in param_setup_dict.items():
+        argspec = inspect.getfullargspec(param_setup_func)
+
+        input_args = {}
+        for arg in argspec.args:
+            if arg == "self":
+                continue
+
+            # Is this arg a foreign parameter on the component?
+            arg_var = vars_dict.get(arg)
+            if (arg_var is not None
+                    and arg_var.metadata.get('var_type') is XSOVarType.PARAMETER
+                    and arg_var.metadata.get('foreign') is True):
+                foreign_label = getattr(cls, arg)
+                try:
+                    input_args[arg] = cls.core.model.parameters[foreign_label]
+                except KeyError:
+                    raise KeyError(
+                        f"Parameter setup_func '{param_setup_func.__name__}' on "
+                        f"component '{cls.label}' references foreign parameter "
+                        f"'{arg}' via label '{foreign_label}', but that label is "
+                        f"not registered in model.parameters. Check that the "
+                        f"source component declares the parameter and runs at "
+                        f"an earlier init stage."
+                    )
+            else:
+                input_args[arg] = getattr(cls, arg)
+
+        value = param_setup_func(cls, **input_args)
+        cls.core.add_parameter(label=cls.label + '_' + var, value=value)
 
 
 def _initialize_forcings(cls, forcing_dict):
@@ -477,6 +570,7 @@ def component(cls=None):
         attr_cls = attr.attrs(cls, repr=False)
         vars_dict = _create_variables_dict(attr_cls)
         forcing_dict = _create_forcing_dict(cls, vars_dict)
+        param_setup_dict = _create_parameter_setup_dict(cls, vars_dict)
         index_dict = _create_index_dict(cls, vars_dict)
 
         # implement a basic automatic process ordering
@@ -532,6 +626,8 @@ def component(cls=None):
             _initialize_process_vars(self, vars_dict)
 
             self.flux_input_args = _create_flux_inputargs_dict(self, vars_dict)
+
+            _initialize_parameter_setup_funcs(self, param_setup_dict, vars_dict)
 
             _initialize_fluxes(self, vars_dict)
 
