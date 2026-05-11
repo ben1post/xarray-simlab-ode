@@ -170,13 +170,21 @@ def parameter(foreign=False, setup_func=None, broadcast=False,
             "another component; only the declaring (source) side uses broadcast=True."
         )
 
+    attrs = dict(attrs) if attrs is not None else {}
+    # setup_func parameters are emitted with intent='out' (computed once at
+    # model initialization). Mark them for inclusion in output_vars="ALL"
+    # so users can read the computed value back without having to request
+    # it by name. Mirrors the convention used by variable/forcing/flux.
+    if setup_func is not None:
+        attrs['xso_store_out'] = True
+
     metadata = {
         "var_type": XSOVarType.PARAMETER,
         "foreign": foreign,
         "setup_func": setup_func,
         "broadcast": broadcast,
         "dims": dims,
-        "attrs": dict(attrs) if attrs is not None else {},
+        "attrs": attrs,
         "description": description,
     }
 

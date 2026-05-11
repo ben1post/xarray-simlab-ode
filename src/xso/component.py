@@ -549,6 +549,10 @@ def _initialize_parameter_setup_funcs(cls, param_setup_dict, vars_dict):
 
         value = param_setup_func(cls, **input_args)
         cls.core.add_parameter(label=cls.label + '_' + var, value=value)
+        # Also expose on the process class so xsimlab's intent='out' property
+        # descriptor can read the value back when collecting outputs (mirrors
+        # the as_parameter=True index handling below).
+        setattr(cls, var, value)
 
 
 def _initialize_forcings(cls, forcing_dict, vars_dict):

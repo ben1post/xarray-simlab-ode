@@ -620,7 +620,6 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         return out_ds
 
 
-# Alternative: Class-based approach for more control
 class StabilityAnalysisHook(xs.RuntimeHook):
     """
     Runtime hook class for capturing stability analysis results.
@@ -736,11 +735,25 @@ def _run_model_scan_stability(task_data):
         if stability_data and 'stability' in stability_data and 'max_eigenvalue_real' in stability_data:
             model_out['stability'] = stability_data['stability']
             model_out['max_eigenvalue'] = stability_data['max_eigenvalue_real']
+            model_out['n_positive_eigenvalues'] = (
+                (), stability_data.get('n_positive_eigenvalues', np.nan))
+            model_out['n_complex_pairs'] = (
+                (), stability_data.get('n_complex_pairs', np.nan))
+
+            # Imag part of the eigenvalue with the largest real part
+            eigs_real = stability_data.get('eigenvalues_real')
+            eigs_imag = stability_data.get('eigenvalues_imag')
+            if eigs_real is not None and eigs_imag is not None and len(eigs_real) > 0:
+                idx_max = int(np.argmax(eigs_real))
+                model_out['max_eigenvalue_imag'] = ((), float(eigs_imag[idx_max]))
+            else:
+                model_out['max_eigenvalue_imag'] = ((), np.nan)
         else:
-            # The hook ran but results are missing (e.g., due to default IVs failing)
-            # Assign NaN to these coordinates so the point is marked as failed.
-            model_out['stability'] = ((), np.nan)  # Using xarray tuple format for a scalar
+            model_out['stability'] = ((), np.nan)
             model_out['max_eigenvalue'] = ((), np.nan)
+            model_out['n_positive_eigenvalues'] = ((), np.nan)
+            model_out['n_complex_pairs'] = ((), np.nan)
+            model_out['max_eigenvalue_imag'] = ((), np.nan)
 
     except Exception as e:
         # Catch any other unexpected error during result extraction
