@@ -22,25 +22,53 @@ class XSOCore:
     switching or modifying either component.
     """
 
-    def __init__(self, solver):
+    def __init__(self, solver, solver_kwargs=None):
         """
         Initializes XSO Model and XSO Solver, and stores solve start and end for diagnostics.
 
         Parameters
         ----------
-        solver : {'stepwise', 'solve_ivp'} or subclass of SolverABC
+        solver : {'stepwise', 'solve_ivp', 'fsolve', 'deriv', 'stability', 'hybrid_stability'} \
+                 or subclass of SolverABC
            Solver name as str, has to be built into xso.
            Alternatively can be passed a custom subclass of xso.solver.SolverABC.
+        solver_kwargs : dict or None, optional
+            Extra keyword arguments forwarded to the underlying solver
+            call (e.g. ``scipy.integrate.solve_ivp`` for ``'solve_ivp'``,
+            ``scipy.optimize.fsolve`` for ``'fsolve'`` / ``'stability'``
+            / ``'hybrid_stability'``). Merged on top of each solver's
+            class-level ``DEFAULT_SOLVER_KWARGS``; user-supplied keys
+            win on collision. Solvers without an underlying scipy call
+            (``'stepwise'``, ``'deriv'``) silently ignore the argument.
+
+            When ``solver`` is a pre-built :class:`SolverABC` instance
+            and ``solver_kwargs`` is non-empty, the user-supplied kwargs
+            are merged on top of the instance's existing
+            ``solver_kwargs`` dict (setup-time wins).
         """
         self.solve_start = None
         self.solve_end = None
 
+        solver_kwargs = dict(solver_kwargs) if solver_kwargs else {}
+
         if isinstance(solver, str):
             try:
-                self.solver = _built_in_solvers[solver]()
+                self.solver = _built_in_solvers[solver](solver_kwargs=solver_kwargs)
             except KeyError:
-                raise KeyError("Solver name passed is not built-in. Please choose from: 'stepwise', 'solve_ivp'.")
+                raise KeyError(
+                    "Solver name passed is not built-in. Please choose from: "
+                    + ", ".join(repr(k) for k in _built_in_solvers)
+                    + "."
+                )
         elif isinstance(solver, SolverABC):
+            # Setup-time kwargs win over kwargs baked into the instance.
+            if solver_kwargs:
+                existing = getattr(solver, 'solver_kwargs', None) or {}
+                solver.solver_kwargs = {**existing, **solver_kwargs}
+            elif not hasattr(solver, 'solver_kwargs'):
+                # Backwards-compat for custom SolverABC subclasses that
+                # predate solver_kwargs and don't call super().__init__.
+                solver.solver_kwargs = {}
             self.solver = solver
         else:
             raise Exception("Solver argument passed to model is not built-in or subclass of SolverABC.")

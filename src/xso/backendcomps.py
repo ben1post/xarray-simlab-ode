@@ -1,3 +1,5 @@
+import json
+
 import xsimlab as xs
 from .core import XSOCore
 
@@ -15,6 +17,10 @@ class Backend:
     __________
     solver_type : xarray-simlab variable
         a string argument passed at model setup, that defines which solver is used
+    solver_kwargs : xarray-simlab variable
+        a dict of extra keyword arguments forwarded to the underlying
+        solver call (see :class:`xso.core.XSOCore`). Defaults to ``{}``
+        and is injected automatically by :func:`xso.setup`.
     core : xarray-simlab any_object
         stores the XSOCore class initialized with passed solver_type
     m : xarray-simlab any_object
@@ -29,6 +35,14 @@ class Backend:
     """
 
     solver_type = xs.variable(intent='in', description='solver type to use for model')
+    solver_kwargs = xs.variable(
+        intent='in',
+        description='JSON-encoded extra keyword arguments forwarded to the '
+                    'underlying solver call (e.g. scipy.integrate.solve_ivp, '
+                    'scipy.optimize.fsolve). The slot stores a JSON string '
+                    'so that xsimlab can persist it to zarr; '
+                    'Backend.initialize decodes it before forwarding.'
+    )
     core = xs.any_object(description='model backend instance is stored here')
     m = xs.any_object(description='math wrapper functions provided by solver')
 
@@ -37,7 +51,8 @@ class Backend:
 
         Creates core attribute to hold XSOCore, and m attribute to hold
         math function wrappers."""
-        self.core = XSOCore(self.solver_type)
+        kwargs = json.loads(self.solver_kwargs) if self.solver_kwargs else {}
+        self.core = XSOCore(self.solver_type, solver_kwargs=kwargs)
         self.m = self.core.solver.MathFunctionWrappers
 
     def finalize(self):

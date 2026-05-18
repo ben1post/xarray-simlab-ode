@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
@@ -23,7 +24,27 @@ def to_ndarray(value):
 class SolverABC(ABC):
     """Abstract base class of backend solver class,
     use subclass to solve model within the XSO framework.
+
+    Parameters
+    ----------
+    solver_kwargs : dict or None, optional
+        Extra keyword arguments forwarded to the underlying solver call
+        (e.g. ``scipy.integrate.solve_ivp`` for :class:`IVPSolver`,
+        ``scipy.optimize.fsolve`` for :class:`FSolver` and the stability
+        solvers). Solvers that do not have an underlying scipy call
+        (currently :class:`StepwiseSolver` and :class:`DerivativeCalculator`)
+        accept but silently ignore the argument. Defaults to an empty
+        dict.
+
+        Each solver defines its own default kwargs (e.g. ``rtol=1e-6,
+        atol=1e-9`` for :class:`IVPSolver`); user-supplied values
+        override the defaults on a key-by-key basis.
     """
+
+    def __init__(self, solver_kwargs=None):
+        # Stored as a fresh dict so that mutations on the solver instance
+        # do not leak back into the user's dict.
+        self.solver_kwargs = dict(solver_kwargs) if solver_kwargs else {}
 
     @abstractmethod
     def add_variable(self, label, initial_value, model):
@@ -139,9 +160,37 @@ class IVPSolver(SolverABC):
     included in the SciPy Python package.
 
     By default, it utilizes an explicit Runge-Kutta method of order 5(4).
+
+    For stiff systems, pass ``solver_kwargs={'method': 'LSODA'}`` (or
+    ``'BDF'`` / ``'Radau'``) to :func:`xso.setup`. Tolerances can be
+    adjusted with e.g. ``solver_kwargs={'rtol': 1e-3, 'atol': 1e-12}``;
+    any other keyword argument accepted by
+    :func:`scipy.integrate.solve_ivp` may also be supplied this way.
+    User-supplied kwargs are merged on top of the class-level defaults
+    (:attr:`DEFAULT_SOLVER_KWARGS`).
     """
 
-    def __init__(self):
+    #: Default keyword arguments forwarded to ``scipy.integrate.solve_ivp``.
+    #: User-supplied ``solver_kwargs`` are merged on top of this dict
+    #: (user wins on key collisions).
+    DEFAULT_SOLVER_KWARGS = {'rtol': 1e-6, 'atol': 1e-9}
+
+    #: Threshold for the stiffness-diagnostic warning: if the step
+    #: controller does more than this many RHS evaluations per output
+    #: point, a one-shot UserWarning suggests loosening tolerances or
+    #: switching to a stiff method. Set to ``float('inf')`` to disable.
+    NFEV_WARN_RATIO = 100
+
+    #: Class-level guard ensuring the stiffness warning fires at most
+    #: once per Python process. Set to ``True`` before model setup to
+    #: suppress the warning entirely; set to ``False`` to re-arm.
+    #: Forked parscan workers inherit ``False`` and emit their own
+    #: warning (so a 30-cell scan run with 8 workers emits at most 8
+    #: warnings, not 30).
+    _nfev_warned = False
+
+    def __init__(self, solver_kwargs=None):
+        super().__init__(solver_kwargs)
         self.var_init = defaultdict()
         self.flux_init = defaultdict()
 
@@ -245,14 +294,43 @@ class IVPSolver(SolverABC):
         instability_event.terminal = True
         instability_event.direction = 0
 
+        # Merge class-level defaults with user-supplied solver_kwargs.
+        # User-supplied keys win on collision (see SolverABC docstring).
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+
         # solving model here:
         full_model_out = solve_ivp(model.model_function,
                                    t_span=[model.time[0], model.time[-1]],
                                    y0=full_init,
                                    t_eval=model.time,
                                    events=instability_event,
-                                   rtol=1e-6,
-                                   atol=1e-9)
+                                   **kwargs)
+
+        # Stiffness-diagnostic: if the step controller did
+        # disproportionately many RHS evaluations per output point, hint
+        # at common causes. ``len(result.t)`` is used over
+        # ``len(t_eval)`` so the ratio reflects work done in the
+        # event-truncated case (where result.t is shorter than t_eval).
+        # Fires at most once per Python process; each forked parscan
+        # worker emits its own warning at most once.
+        n_out = max(1, len(full_model_out.t))
+        ratio = full_model_out.nfev / n_out
+        if (ratio > IVPSolver.NFEV_WARN_RATIO
+                and not IVPSolver._nfev_warned):
+            IVPSolver._nfev_warned = True
+            warnings.warn(
+                f"solve_ivp used {full_model_out.nfev} RHS evaluations "
+                f"for {n_out} output points ({ratio:.0f}/output). The "
+                f"step controller is working hard — common causes are "
+                f"stiff dynamics or noise-floor tracking under tight "
+                f"atol. Try loosening tolerances, e.g. "
+                f"solver_kwargs={{'atol': 1e-6, 'rtol': 1e-4}}, or "
+                f"switch to a stiff method with "
+                f"solver_kwargs={{'method': 'LSODA'}}. "
+                f"(This warning fires once per process.)",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # if full_model_out.t_events[0].size > 0:
         #     print("Event triggered at t =", full_model_out.t_events[0])
@@ -327,13 +405,21 @@ class IVPSolver(SolverABC):
 
 
 class FSolver(IVPSolver):
-    """Solver backend using scipy.integrate.fsolve to solve model steady states.
+    """Solver backend using scipy.optimize.fsolve to solve for steady states.
 
-    SOLVE_IVP is a variable step-size solver for ordinary differential equations,
-    included in the SciPy Python package.
+    Calls ``scipy.optimize.fsolve`` on the model's RHS and stores the
+    converged steady-state in the final time index of every state
+    variable's output array.
 
-    By default, it utilizes an explicit Runge-Kutta method of order 5(4).
+    Forward kwargs to ``fsolve`` via ``solver_kwargs`` on
+    :func:`xso.setup`, e.g. ``solver_kwargs={'xtol': 1e-10,
+    'maxfev': 5000}``. Defaults to scipy's own fsolve defaults.
     """
+
+    #: Default keyword arguments forwarded to ``scipy.optimize.fsolve``.
+    #: Empty by default; scipy's built-in fsolve defaults are used unless
+    #: overridden via ``solver_kwargs`` on :func:`xso.setup`.
+    DEFAULT_SOLVER_KWARGS = {}
 
 
     def solve(self, model, time_step):
@@ -348,8 +434,13 @@ class FSolver(IVPSolver):
             full_init = np.concatenate([y, [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
             return model.model_function(time=0, current_state=full_init, only_return_state=True)
 
+        # Merge class-level defaults with user-supplied solver_kwargs.
+        # User-supplied keys win on collision (see SolverABC docstring).
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+
         # Solve for steady state
-        y_steady, info, ier, msg = fsolve(rhs_steady, state_init, full_output=True)
+        y_steady, info, ier, msg = fsolve(rhs_steady, state_init,
+                                          full_output=True, **kwargs)
 
         if ier != 1:
             print(f"[WARNING] fsolve did not converge: {msg}")
@@ -493,7 +584,15 @@ class OLDNumericalStabilitySolver(IVPSolver):
     2. Numerically computes Jacobian
     3. Computes eigenvalues for stability analysis
     4. Stores results like FSolver
+
+    .. note::
+
+        Legacy class kept for reference; not in the public solver
+        registry. Prefer :class:`NumericalStabilitySolver`.
     """
+
+    #: Defaults forwarded to ``scipy.optimize.fsolve``.
+    DEFAULT_SOLVER_KWARGS = {}
 
     def solve(self, model, time_step):
         """
@@ -528,8 +627,13 @@ class OLDNumericalStabilitySolver(IVPSolver):
             # Return only non-time derivatives (skip first element which is dtime/dt = 1)
             return derivs[1:]
 
+        # Merge class-level defaults with user-supplied solver_kwargs.
+        # User-supplied keys win on collision (see SolverABC docstring).
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+
         # Solve for steady state (from FSolver)
-        y_steady, info, ier, msg = fsolve(rhs_steady, state_init, full_output=True)
+        y_steady, info, ier, msg = fsolve(rhs_steady, state_init,
+                                          full_output=True, **kwargs)
 
         if ier != 1:
             print(f"[WARNING] fsolve did not converge: {msg}")
@@ -793,7 +897,15 @@ class NumericalStabilitySolver(IVPSolver):
     2. Numerically computes Jacobian
     3. Computes eigenvalues for stability analysis
     4. Stores results like FSolver
+
+    Forward kwargs to the inner ``fsolve`` call via ``solver_kwargs`` on
+    :func:`xso.setup`.
     """
+
+    #: Default keyword arguments forwarded to ``scipy.optimize.fsolve``.
+    #: Empty by default; scipy's built-in fsolve defaults are used unless
+    #: overridden via ``solver_kwargs`` on :func:`xso.setup`.
+    DEFAULT_SOLVER_KWARGS = {}
 
     def solve(self, model, time_step):
         """
@@ -828,8 +940,13 @@ class NumericalStabilitySolver(IVPSolver):
             # Return only non-time derivatives (skip first element which is dtime/dt = 1)
             return derivs[1:]
 
+        # Merge class-level defaults with user-supplied solver_kwargs.
+        # User-supplied keys win on collision (see SolverABC docstring).
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+
         # Solve for steady state (from FSolver)
-        y_steady, info, ier, msg = fsolve(rhs_steady, state_init, full_output=True)
+        y_steady, info, ier, msg = fsolve(rhs_steady, state_init,
+                                          full_output=True, **kwargs)
 
         if ier != 1:
             print(f"[WARNING] fsolve did not converge: {msg}")
@@ -1130,9 +1247,19 @@ class StepwiseSolver(SolverABC):
     """Solver that can handle stepwise calculation built into xsimlab framework.
 
     Model output is computed step by step and assigned to the appropriate
-    storage arrays in xsimlab backend."""
+    storage arrays in xsimlab backend.
 
-    def __init__(self):
+    This solver has no underlying scipy call, so ``solver_kwargs`` on
+    :func:`xso.setup` is accepted but **silently ignored**. The argument
+    is recorded on the instance for introspection.
+    """
+
+    #: No underlying scipy call exists for this solver; kwargs are
+    #: stored on the instance but not consumed.
+    DEFAULT_SOLVER_KWARGS = {}
+
+    def __init__(self, solver_kwargs=None):
+        super().__init__(solver_kwargs)
         self.model_time = 0
         self.time_index = 0
 
@@ -1288,9 +1415,20 @@ class HydridStabilitySolver(SolverABC):
 
     Finds equilibrium points, calculates Jacobian matrix, and computes eigenvalues
     for stability analysis. Prints analysis to console and saves steady states.
+
+    Forward kwargs to the inner ``fsolve`` calls via ``solver_kwargs`` on
+    :func:`xso.setup`.
     """
 
-    def __init__(self):
+    #: Default keyword arguments forwarded to ``scipy.optimize.fsolve``.
+    #: ``xtol`` and ``maxfev`` are set tighter than scipy's own defaults
+    #: because the SymPy-derived RHS can be sensitive; override either
+    #: via ``solver_kwargs`` on :func:`xso.setup` as needed.
+    DEFAULT_SOLVER_KWARGS = {'xtol': 1e-8, 'maxfev': 10000}
+
+    def __init__(self, solver_kwargs=None):
+        super().__init__(solver_kwargs)
+
         # Symbolic representations
         self.symbolic_vars = {}
         self.symbolic_params = {}
@@ -1890,6 +2028,11 @@ class HydridStabilitySolver(SolverABC):
 
         use_analytical = (n_states <= jacobian_threshold)
 
+        # Merge class-level defaults (xtol=1e-8, maxfev=10000) with user
+        # solver_kwargs. User-supplied keys win on collision (see
+        # SolverABC docstring).
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+
         if not use_analytical:
             # Use numerical Jacobian approximation (more robust)
             print("[DEBUG] Using numerical Jacobian approximation...")
@@ -1897,8 +2040,7 @@ class HydridStabilitySolver(SolverABC):
                 rhs_steady,
                 self.var_init_flat,
                 full_output=True,
-                xtol=1e-8,
-                maxfev=10000
+                **kwargs,
             )
         else:
             # Try analytical Jacobian (currently has NaN issues)
@@ -1908,8 +2050,7 @@ class HydridStabilitySolver(SolverABC):
                 self.var_init_flat,
                 fprime=jac_steady,
                 full_output=True,
-                xtol=1e-8,
-                maxfev=10000
+                **kwargs,
             )
 
         converged = (ier == 1)

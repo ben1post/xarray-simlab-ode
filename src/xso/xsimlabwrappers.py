@@ -1,3 +1,5 @@
+import json
+
 import xsimlab as xs
 from xsimlab.variable import VarIntent
 
@@ -33,7 +35,8 @@ def create(components, time_unit='d'):
     return xs.Model(components)
 
 
-def setup(solver, model, input_vars, output_vars=None, time=None):
+def setup(solver, model, input_vars, output_vars=None, time=None,
+          solver_kwargs=None):
     """Create a specific setup for model runs.
 
     This function wraps xsimlab's create_setup and adds a dummy clock parameter
@@ -44,8 +47,10 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
 
     Parameters
     ----------
-    solver : :class:`xso.SolverABC` subclass
-        Solver backend to be used at model runtime.
+    solver : str or :class:`xso.SolverABC` subclass
+        Solver backend to be used at model runtime. Built-in names:
+        ``'solve_ivp'``, ``'stepwise'``, ``'fsolve'``, ``'deriv'``,
+        ``'stability'``, ``'hybrid_stability'``.
     model : :class:`xsimlab.Model`
         Create a simulation setup for this model.
     input_vars : dict, optional
@@ -62,18 +67,32 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
         For array-like values with no dimension labels, xarray-simlab will look
         in ``model`` variables metadata for labels matching the number
         of dimensions of those arrays.
-    output_vars : dict, optional
-        Dictionary with model variable names to save as simulation output.
-        Entries of the dictionary look similar than for ``input_vars``
-        (see here above), except that here ``value`` must correspond
-        to the dimension of a clock coordinate (i.e., new output values will
-        be saved at each time given by the coordinate labels) or
-        ``None`` (i.e., only one value will be saved at the end
-        of the simulation).
-    solver_kwargs : dict, optional
-        Additional keyword arguments to pass to the solver backend. This is
-        directly passed to the solving function and can be used to adjust parameters
-        for solver backends that allow this, such as the IVPSolver backend.
+    output_vars : dict, set, str, or None, optional
+        Selection of model variables to save as simulation output.
+
+        - ``None`` (default) or ``"ALL"``: record every variable
+          internally tagged for storage (state variables, fluxes,
+          forcings, and ``setup_func`` parameters).
+        - A ``set`` of variable names: record only the named variables,
+          each at every clock tick.
+        - A ``dict``: the xsimlab-native form, mapping variable name
+          to a clock coordinate (or ``None`` for end-of-run only).
+    time : numpy.ndarray
+        Sequence of time steps at which to evaluate the model. **Required.**
+    solver_kwargs : dict or None, optional
+        Extra keyword arguments forwarded to the underlying solver call
+        (e.g. ``scipy.integrate.solve_ivp`` for ``'solve_ivp'``,
+        ``scipy.optimize.fsolve`` for ``'fsolve'`` / ``'stability'`` /
+        ``'hybrid_stability'``). Merged on top of each solver's
+        class-level ``DEFAULT_SOLVER_KWARGS``; user-supplied keys win on
+        collision. Solvers without an underlying scipy call
+        (``'stepwise'``, ``'deriv'``) silently ignore the argument.
+
+        Typical uses: switch to a stiff-system solver via
+        ``solver_kwargs={'method': 'LSODA'}`` (also ``'BDF'``,
+        ``'Radau'``); loosen or tighten tolerances via
+        ``solver_kwargs={'rtol': 1e-3, 'atol': 1e-12}``; bound the
+        adaptive step via ``solver_kwargs={'max_step': 0.1}``.
 
     Returns
     -------
@@ -87,7 +106,13 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
     if time is None:
         raise Exception("Please supply (numpy) array of explicit timesteps to time keyword argument")
 
+    # solver_kwargs is JSON-encoded to a string before being injected into
+    # the xsimlab input dataset. xsimlab persists every input variable to
+    # zarr at run time (see stores.write_input_xr_dataset), and zarr cannot
+    # serialize arbitrary Python dicts; a string survives the round-trip
+    # trivially. Backend.initialize calls json.loads to recover the dict.
     input_vars.update({'Core__solver_type': solver,
+                       'Core__solver_kwargs': json.dumps(solver_kwargs or {}),
                        'Time__time_input': time})
 
     # convenient option "ALL" and providing set of values that automatically are returned with dim None:
@@ -119,7 +144,8 @@ def setup(solver, model, input_vars, output_vars=None, time=None):
                                output_vars=output_vars)
 
 
-def update_setup(model, old_setup, new_solver, new_time=None):
+def update_setup(model, old_setup, new_solver, new_time=None,
+                 new_solver_kwargs=None):
     """Change existing model setup to another solver type,
     with the possibility to update solver time as well.
 
@@ -133,8 +159,16 @@ def update_setup(model, old_setup, new_solver, new_time=None):
         The model object that was used to create the model setup.
     old_setup : :class:`xarray.Dataset`
         The previous model setup Dataset, to be updated.
-    new_solver : :class:`xso.SolverABC` subclass
+    new_solver : str or :class:`xso.SolverABC` subclass
         The new solver, that the model setup should be updated to be compatible with.
+    new_time : numpy.ndarray or None, optional
+        New time array. Defaults to keeping the existing time array.
+    new_solver_kwargs : dict or None, optional
+        Extra keyword arguments forwarded to the new solver's underlying
+        call (see :func:`setup`). When ``None`` (default), the
+        ``Core__solver_kwargs`` slot on ``old_setup`` is left unchanged,
+        so the previous solver's kwargs carry over. Pass an empty dict
+        ``{}`` to explicitly clear them.
 
     Returns
     -------
@@ -147,15 +181,20 @@ def update_setup(model, old_setup, new_solver, new_time=None):
     else:
         time = new_time
 
+    # See note in setup(): solver_kwargs travels as a JSON-encoded string
+    # so it survives xsimlab's zarr persistence step.
+    input_vars = {'Core__solver_type': new_solver,
+                  'Time__time_input': time}
+    if new_solver_kwargs is not None:
+        input_vars['Core__solver_kwargs'] = json.dumps(new_solver_kwargs)
+
     if new_solver != "stepwise":
         with model:
-            setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
-                                                               'Time__time_input': time})
+            setup1 = old_setup.xsimlab.update_vars(input_vars=input_vars)
             new_setup = setup1.xsimlab.update_clocks(clocks={'clock': [time[0], time[1]]}, master_clock='clock')
     else:
         with model:
-            setup1 = old_setup.xsimlab.update_vars(input_vars={'Core__solver_type': new_solver,
-                                                               'Time__time_input': time})  # ,
+            setup1 = old_setup.xsimlab.update_vars(input_vars=input_vars)
             new_setup = setup1.xsimlab.update_clocks(clocks={'clock': time}, master_clock='clock')
 
     return new_setup
