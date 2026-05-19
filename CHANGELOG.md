@@ -105,6 +105,25 @@
   matched-Type-II grazing setups). Silent by default; XSO-internal
   kwarg, popped before the remainder is forwarded to
   `scipy.integrate.solve_ivp`.
+- Auto-derived Jacobian sparsity on `StiffIVPSolver`. The bundle
+  now derives the Jacobian sparsity pattern from the model's
+  component graph at solve time (via closure introspection of
+  each `@xso.flux`-decorated callable's `flux_input_args` plus
+  `model.fluxes_per_var`) and forwards it to scipy as
+  `jac_sparsity`. Scipy's BDF / Radau / LSODA then use colored
+  finite differences for Jacobian assembly — a 40×-ish per-Jacobian
+  speedup on the matched-Type-II grazing regime over the dense FD
+  scipy falls back to without a sparsity hint. No edits to
+  `component.py` or `model.py`; lives entirely in `xso.solvers`,
+  using a no-op `_resolve_solver_kwargs` hook added to `IVPSolver`
+  that subclasses override to post-process the forwarded kwargs.
+  Supported `jac_sparsity` values: `'auto'` / `True` (the default
+  when the key is omitted, auto-derives from the component graph),
+  `False` / `None` (drop the kwarg, scipy uses dense FD). Other
+  values raise `ValueError` — precomputed sparse patterns are
+  intentionally not supported on this path because `solver_kwargs`
+  is JSON-encoded for zarr persistability and `scipy.sparse`
+  matrices aren't JSON-serializable.
 
 ### Changed — Solver diagnostics
 

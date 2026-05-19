@@ -8,6 +8,7 @@ import math
 
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
+import scipy.sparse
 
 from .model import return_dim_ndarray
 
@@ -37,6 +38,161 @@ def to_ndarray(value):
         return value
     else:
         return np.array([value])
+
+
+def _flux_reads(flux_callable):
+    """Recover the list of state-vector labels a flux callable reads.
+
+    ``@xso.flux``-decorated functions are wrapped by
+    :func:`xso.component.flux_decorator` into an ``unpack_args`` closure
+    that captures the bound component instance as a closure cell. The
+    instance carries ``flux_input_args`` — a structured dict of every
+    state / flux label the flux reads, broken down by the routing path
+    that delivers it (``'vars'``, ``'list_input_vars'``, ``'group_args'``).
+    This helper walks the closure and flattens those entries into a
+    single label list, used by :func:`_derive_jac_sparsity` to build the
+    Jacobian sparsity pattern.
+
+    Returns
+    -------
+    list[str] or None
+        Flat list of labels this flux reads from the model state, or
+        ``None`` if the closure isn't an XSO-wrapped flux. ``None`` is
+        treated by callers as "no known state dependencies" — correct
+        for the framework's constant-valued internal fluxes (e.g.
+        ``Time.time_flux``, which is registered directly without going
+        through the component decorator). The convention is that any
+        flux with real state dependencies goes through ``@xso.flux``.
+    """
+    code = getattr(flux_callable, '__code__', None)
+    closure = getattr(flux_callable, '__closure__', None)
+    if code is None or closure is None:
+        return None
+
+    freevars = code.co_freevars
+    if 'self' not in freevars:
+        return None
+
+    comp = closure[freevars.index('self')].cell_contents
+    args = getattr(comp, 'flux_input_args', None)
+    if args is None:
+        return None
+
+    labels = []
+    for entry in args.get('vars', []):
+        lbl = entry['label']
+        if isinstance(lbl, (list, np.ndarray)):
+            labels.extend(lbl)
+        else:
+            labels.append(lbl)
+    for entry in args.get('list_input_vars', []):
+        lbl = entry['label']
+        if isinstance(lbl, (list, np.ndarray)):
+            labels.extend(lbl)
+        else:
+            labels.append(lbl)
+    for entry in args.get('group_args', []):
+        lbl = entry['label']
+        if isinstance(lbl, (list, np.ndarray)):
+            labels.extend(lbl)
+        else:
+            labels.append(lbl)
+    return labels
+
+
+def _derive_jac_sparsity(model):
+    """Build a sparse Jacobian pattern for ``model.model_function``.
+
+    Walks the model's component graph and returns a
+    ``scipy.sparse.csr_matrix`` of dtype ``bool`` and shape
+    ``(N_total, N_total)`` where ``N_total`` is the size of the flat
+    state vector that :meth:`Model.model_function` consumes. Used by
+    :class:`StiffIVPSolver` to provide ``jac_sparsity`` to scipy's
+    BDF / Radau / LSODA implementations, which use it to do *colored*
+    finite-difference Jacobian assembly — far cheaper than the dense
+    FD scipy falls back to when no sparsity hint is supplied.
+
+    The pattern is constructed entirely from metadata already present
+    on the assembled model:
+
+    - **Flux rows**: for each flux in ``model.fluxes``, the row block
+      is nonzero in the column slices of every state / flux label the
+      flux reads (recovered via :func:`_flux_reads`).
+    - **State-variable rows**: for each variable in
+      ``model.variables``, contributing fluxes are collected from
+      ``model.fluxes_per_var`` (direct entries plus
+      ``'list_input'`` routing whose ``list_input`` list contains this
+      variable). The row block is nonzero in the union of those
+      fluxes' read-label column slices.
+    - **Constant-valued framework fluxes** (e.g. ``Time.time_flux``)
+      resolve to empty read-sets via :func:`_flux_reads` returning
+      ``None``, which yields all-zero rows — correct for
+      ``d(const)/dy = 0``.
+    """
+    # Flat-state slice map (matches Model.unpack_flat_state ordering).
+    slices = {}
+    offset = 0
+    for key, dims in model.full_model_dims.items():
+        if dims is None:
+            size = 1
+        elif isinstance(dims, int):
+            size = dims
+        else:
+            size = int(np.prod(dims))
+        slices[key] = (offset, offset + size)
+        offset += size
+    n_total = offset
+
+    # Per-flux read-labels via closure introspection.
+    flux_reads = {
+        label: _flux_reads(callable_)
+        for label, callable_ in model.fluxes.items()
+    }
+
+    # Build pattern as LIL (cheap incremental fill), convert to CSR at the end.
+    S = scipy.sparse.lil_matrix((n_total, n_total), dtype=bool)
+
+    def _mark(row_start, row_end, read_labels):
+        if not read_labels:
+            return
+        for read_lbl in read_labels:
+            slot = slices.get(read_lbl)
+            if slot is None:
+                # Read label is not in the flat state — parameter, forcing,
+                # or an unknown label. Skip silently; the Jacobian over the
+                # state vector is unaffected by non-state inputs.
+                continue
+            read_start, read_end = slot
+            S[row_start:row_end, read_start:read_end] = True
+
+    # Flux rows.
+    for flux_label, reads in flux_reads.items():
+        flux_start, flux_end = slices[flux_label]
+        _mark(flux_start, flux_end, reads or [])
+
+    # State-variable rows: union of read-labels across contributing fluxes.
+    for var_label in model.variables:
+        var_start, var_end = slices[var_label]
+        contributing = []
+        for entry in model.fluxes_per_var.get(var_label, []):
+            contributing.append(entry['label'])
+        # list_input routing — fluxes whose 'list_input' list contains
+        # this var feed it sliced pieces of their value.
+        for entry in model.fluxes_per_var.get('list_input', []):
+            list_input = entry.get('list_input', [])
+            if not isinstance(list_input, (list, np.ndarray)):
+                continue
+            if var_label in list(list_input):
+                contributing.append(entry['label'])
+
+        union_reads = set()
+        for flux_label in contributing:
+            reads = flux_reads.get(flux_label)
+            if reads:
+                union_reads.update(reads)
+        _mark(var_start, var_end, sorted(union_reads))
+
+    return S.tocsr()
 
 
 class SolverABC(ABC):
@@ -364,6 +520,13 @@ class IVPSolver(SolverABC):
         inrun_threshold = float(kwargs.pop('inrun_alert_threshold',
                                            self.INRUN_PREDICTED_NFEV_WARN))
 
+        # Subclass hook: subclasses can post-process ``kwargs`` here
+        # before it is forwarded to ``scipy.integrate.solve_ivp``. Used
+        # by :class:`StiffIVPSolver` to resolve ``jac_sparsity`` from
+        # the component graph and to emit the non-stiff-method warning.
+        # Default implementation on :class:`IVPSolver` is a no-op.
+        self._resolve_solver_kwargs(kwargs, model)
+
         # Bracket the time span once, up front, for the in-run alert's
         # progress-fraction calculation. t_span <= 0 is degenerate
         # (zero-length integration) and disables the alert entirely.
@@ -566,6 +729,35 @@ class IVPSolver(SolverABC):
         """Empty cleanup method, not necessary for this solver."""
         pass
 
+    def _resolve_solver_kwargs(self, kwargs, model):
+        """Hook for subclasses to post-process the kwargs forwarded to
+        ``scipy.integrate.solve_ivp``.
+
+        Called inside :meth:`solve` after XSO-internal kwargs
+        (``instability_neg_threshold``, ``instability_pos_threshold``,
+        ``trace_steps``, ``inrun_alert_threshold``) have been popped,
+        with the remaining ``kwargs`` being exactly what scipy will
+        receive. Subclasses can mutate the dict in place — add, modify,
+        or remove entries — before forwarding. Default implementation
+        on :class:`IVPSolver` is a no-op.
+
+        Used by :class:`StiffIVPSolver` to resolve ``jac_sparsity``
+        from the component graph and to emit the non-stiff-method
+        warning; reserved as the natural extension point for future
+        IVP-family subclasses.
+
+        Parameters
+        ----------
+        kwargs : dict
+            The kwargs dict that will be forwarded to
+            ``scipy.integrate.solve_ivp``. Mutate in place.
+        model : :class:`xso.model.Model`
+            The fully-assembled model, exposed for subclasses that need
+            to introspect dependency structure (e.g.
+            :class:`StiffIVPSolver` for Jacobian sparsity).
+        """
+        pass
+
     def _warn_on_instability_event(self, model, result,
                                    neg_threshold, pos_threshold):
         """Emit a UserWarning naming the state variable that tripped the
@@ -727,16 +919,45 @@ class StiffIVPSolver(IVPSolver):
     #: own warning.
     _nonstiff_method_warned = False
 
-    def solve(self, model, time_step):
-        """Warn on non-stiff method choices, then delegate to
-        :meth:`IVPSolver.solve` (which carries every diagnostic and
-        the actual ``scipy.integrate.solve_ivp`` call)."""
+    def _resolve_solver_kwargs(self, kwargs, model):
+        """Resolve the stiff-bundle's solver_kwargs in place.
 
-        # Resolve the final method that scipy will see (same merge
-        # order as IVPSolver.solve: class defaults, then user kwargs).
-        merged = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
-        method = merged.get('method')
+        Handles two concerns the bundle needs to apply before scipy
+        sees ``kwargs``:
 
+        1. **Non-stiff-method warning.** If ``kwargs['method']``
+           resolves to one of :attr:`NON_STIFF_METHODS` (the explicit
+           non-stiff scipy schemes ``RK45`` / ``RK23`` / ``DOP853``),
+           emit a one-shot :class:`UserWarning` explaining the
+           inconsistency with the bundle's intent. The integration
+           still proceeds with the user-supplied method — the warning
+           surfaces the mismatch rather than overriding it.
+
+        2. **Jacobian sparsity.** Resolve the ``jac_sparsity`` kwarg.
+           The full set of supported values is:
+
+           - ``'auto'`` or ``True`` (the default when the key is
+             omitted from ``solver_kwargs``): derive the sparsity
+             pattern from the model's component graph via
+             :func:`_derive_jac_sparsity`. Scipy then uses colored
+             finite differences against this pattern — far cheaper
+             than the dense FD it would otherwise do.
+           - ``False`` or ``None``: drop the kwarg so scipy falls back
+             to dense FD.
+
+           Anything else raises :class:`ValueError`. User-supplied
+           precomputed sparse patterns are intentionally not supported
+           on this path: ``solver_kwargs`` is JSON-encoded through the
+           ``Core__solver_kwargs`` xsimlab slot for zarr persistability,
+           and ``scipy.sparse`` matrices are not JSON-serializable.
+
+           Derivation failure (unexpected closure shape, model graph
+           edge case, etc.) falls back to dense FD with a
+           ``logging.warning`` so the user knows the speedup didn't
+           take effect.
+        """
+        # 1. Non-stiff-method warning.
+        method = kwargs.get('method')
         if (method in self.NON_STIFF_METHODS
                 and not StiffIVPSolver._nonstiff_method_warned):
             StiffIVPSolver._nonstiff_method_warned = True
@@ -756,7 +977,32 @@ class StiffIVPSolver(IVPSolver):
                 stacklevel=2,
             )
 
-        return super().solve(model, time_step)
+        # 2. jac_sparsity resolution.
+        jac_sparsity = kwargs.pop('jac_sparsity', 'auto')
+        if jac_sparsity is True or jac_sparsity == 'auto':
+            try:
+                kwargs['jac_sparsity'] = _derive_jac_sparsity(model)
+            except Exception as exc:
+                logger.warning(
+                    "StiffIVPSolver: jac_sparsity auto-derivation "
+                    "failed; falling back to dense FD. Error: %r",
+                    exc,
+                )
+                # leave kwargs without jac_sparsity → scipy uses dense FD
+        elif jac_sparsity is False or jac_sparsity is None:
+            pass  # already popped; scipy won't see jac_sparsity
+        else:
+            raise ValueError(
+                f"solver='stiff_ivp' received jac_sparsity="
+                f"{jac_sparsity!r}. Supported values: 'auto' or True "
+                f"(auto-derive from the model's component graph, the "
+                f"default), or False / None (dense FD). Precomputed "
+                f"sparse patterns are not supported on this path — "
+                f"solver_kwargs is JSON-encoded through the "
+                f"Core__solver_kwargs xsimlab slot for zarr "
+                f"persistability, and scipy.sparse matrices are not "
+                f"JSON-serializable."
+            )
 
 
 class FSolver(IVPSolver):

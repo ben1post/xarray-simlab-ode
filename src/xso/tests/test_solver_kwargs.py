@@ -892,3 +892,143 @@ def test_post_run_stiffness_warning_mentions_stiff_ivp(monkeypatch):
     )
     # The one-line BDF fallback should still be there.
     assert "'BDF'" in msg, f"Expected BDF still mentioned; got: {msg}"
+
+
+# -----------------------------------------------------------------------------
+# Stage (c) — solver='stiff_ivp' auto-derived Jacobian sparsity.
+# Default behaviour: derive a sparse pattern from the component graph and hand
+# it to scipy, which uses colored FD instead of dense FD when computing the
+# Jacobian. Three plumbing tests + one correctness test on the trivial linear
+# decay model.
+# -----------------------------------------------------------------------------
+
+def test_stiff_ivp_auto_sparsity_forwards_csr_to_scipy(monkeypatch):
+    """With ``solver='stiff_ivp'`` and no user-supplied jac_sparsity,
+    a scipy.sparse.csr_matrix derived from the component graph reaches
+    scipy as the ``jac_sparsity`` kwarg."""
+    import scipy.sparse
+
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+    )
+    with model:
+        setup.xsimlab.run()
+
+    sparsity = captured.get('jac_sparsity')
+    assert scipy.sparse.issparse(sparsity), (
+        f"Expected a scipy sparse matrix as jac_sparsity; "
+        f"got: {type(sparsity).__name__}"
+    )
+    # The _Linear fixture produces a flat state of size 4:
+    # [Time__time (var), X__var (var), Time__time_flux (flux), X__decay (flux)]
+    assert sparsity.shape == (4, 4), (
+        f"Expected (4, 4) sparsity for _Linear fixture; got {sparsity.shape}"
+    )
+
+
+def test_stiff_ivp_jac_sparsity_false_skips_kwarg(monkeypatch):
+    """``solver_kwargs={'jac_sparsity': False}`` suppresses auto-derivation
+    and does NOT forward jac_sparsity to scipy (which then uses dense FD)."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+        solver_kwargs={'jac_sparsity': False},
+    )
+    with model:
+        setup.xsimlab.run()
+
+    assert 'jac_sparsity' not in captured, (
+        "jac_sparsity=False should drop the kwarg before forwarding; "
+        f"captured kwargs: {sorted(captured)}"
+    )
+
+
+def test_derive_jac_sparsity_linear_decay(monkeypatch):
+    """For the trivial Linear decay fixture (dX/dt = -rate*X), the
+    derived sparsity pattern over the (4, 4) flat state vector should
+    have exactly two nonzero entries: the x state-var row and the
+    X__decay flux row, both at the x column. The Time pseudo-variable's
+    row and the Time__time_flux row are correctly all-zero (constant
+    derivative)."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+    )
+    with model:
+        setup.xsimlab.run()
+
+    sparsity = captured['jac_sparsity'].toarray()
+    # Layout (full_model_dims order):
+    #   index 0: Time__time          (state-var, scalar)
+    #   index 1: X__var              (state-var, scalar) — user-labelled 'x'
+    #   index 2: Time__time_flux     (flux, scalar)
+    #   index 3: X__decay            (flux, scalar)
+    #
+    # Expected nonzeros (only entries where dy_i/dy_j != 0):
+    #   - Row 0 (Time): time pseudo-var has constant d/dt = 1 → row all-zero.
+    #   - Row 1 (x): dx/dt = -rate * x → nonzero at column 1 only.
+    #   - Row 2 (Time flux): returns constant 1 → row all-zero.
+    #   - Row 3 (X__decay): reads x → nonzero at column 1 only.
+    expected_nonzero_pairs = {(1, 1), (3, 1)}
+    actual_nonzero_pairs = {
+        (int(i), int(j))
+        for i, j in zip(*np.nonzero(sparsity))
+    }
+    assert actual_nonzero_pairs == expected_nonzero_pairs, (
+        f"Sparsity pattern mismatch for linear decay model.\n"
+        f"  expected nonzero (row, col) pairs: {sorted(expected_nonzero_pairs)}\n"
+        f"  actual nonzero pairs:              {sorted(actual_nonzero_pairs)}\n"
+        f"  full pattern:\n{sparsity.astype(int)}"
+    )
