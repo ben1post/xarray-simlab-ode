@@ -15,6 +15,7 @@ decode with ``json.loads``.
 """
 
 import json
+import logging
 import warnings as _warnings
 
 import numpy as np
@@ -229,10 +230,11 @@ def _slot(setup):
     return json.loads(str(setup['Core__solver_kwargs'].values.item()))
 
 
-def test_update_setup_rewrites_solver_kwargs():
-    """update_setup with new_solver_kwargs rewrites the slot; omitting
-    new_solver_kwargs preserves the previous value; passing an empty
-    dict clears it.
+def test_update_setup_clears_solver_kwargs_by_default():
+    """update_setup clears the solver_kwargs slot when
+    new_solver_kwargs is omitted, so solver-specific kwargs from the
+    previous solver cannot leak into a different solver family. To
+    carry kwargs across an update, the caller passes them explicitly.
 
     Note: new_time must be passed explicitly here. The default
     new_time=None branch of update_setup reads from old_setup.Time__time,
@@ -242,28 +244,28 @@ def test_update_setup_rewrites_solver_kwargs():
     time = np.arange(0.0, 2.0, 1.0)
     model, setup = _build_setup(time=time, solver_kwargs={'method': 'RK45'})
 
-    # Omitting new_solver_kwargs: previous kwargs preserved.
-    setup_kept = xso.xsimlabwrappers.update_setup(
+    # Omitting new_solver_kwargs: slot is cleared.
+    setup_default = xso.update_setup(
         model=model, old_setup=setup, new_solver='solve_ivp',
         new_time=time,
     )
-    assert _slot(setup_kept) == {'method': 'RK45'}
+    assert _slot(setup_default) == {}
 
-    # Passing new_solver_kwargs: slot is rewritten.
-    setup_new = xso.xsimlabwrappers.update_setup(
+    # Passing new_solver_kwargs explicitly: slot is set to that dict.
+    setup_new = xso.update_setup(
         model=model, old_setup=setup, new_solver='solve_ivp',
         new_time=time,
         new_solver_kwargs={'method': 'LSODA', 'rtol': 1e-4},
     )
     assert _slot(setup_new) == {'method': 'LSODA', 'rtol': 1e-4}
 
-    # Passing an empty dict clears the kwargs.
-    setup_cleared = xso.xsimlabwrappers.update_setup(
+    # Passing an empty dict is equivalent to the default.
+    setup_explicit_empty = xso.update_setup(
         model=model, old_setup=setup, new_solver='solve_ivp',
         new_time=time,
         new_solver_kwargs={},
     )
-    assert _slot(setup_cleared) == {}
+    assert _slot(setup_explicit_empty) == {}
 
 
 # -----------------------------------------------------------------------------
@@ -433,6 +435,70 @@ def test_instability_threshold_kwargs_stripped_before_scipy(monkeypatch):
     assert 'instability_pos_threshold' not in captured
     # rtol is a scipy kwarg and DOES reach solve_ivp.
     assert captured.get('rtol') == 1e-4
+
+
+# -----------------------------------------------------------------------------
+# Logging — solver diagnostics no longer go to stdout
+# -----------------------------------------------------------------------------
+
+def test_fsolve_writes_no_stdout_by_default(capsys):
+    """FSolver previously printed initial-state vectors, residuals, and a
+    convergence summary directly to stdout. After the logging refactor,
+    those diagnostics flow through the ``xso.solvers`` logger and are
+    silent by default — no stdout output during the run."""
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='fsolve',
+        model=model,
+        time=[0.0, 1.0],
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+    )
+
+    with model:
+        setup.xsimlab.run()
+
+    captured = capsys.readouterr()
+    assert captured.out == '', (
+        f"Expected no stdout from fsolve run; got: {captured.out!r}"
+    )
+
+
+def test_fsolve_emits_log_records_when_level_set(caplog):
+    """When the caller configures the xso.solvers logger at INFO level,
+    FSolver's high-level progress messages (steady state found, etc.)
+    are captured as log records — proving the diagnostics survived the
+    refactor and are merely silenced by default, not removed."""
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='fsolve',
+        model=model,
+        time=[0.0, 1.0],
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+    )
+
+    with caplog.at_level(logging.INFO, logger='xso.solvers'):
+        with model:
+            setup.xsimlab.run()
+
+    # At least one record from xso.solvers at INFO or above.
+    solver_records = [r for r in caplog.records if r.name == 'xso.solvers']
+    assert solver_records, (
+        "Expected at least one xso.solvers log record at INFO level; "
+        f"got records from: {sorted({r.name for r in caplog.records})}"
+    )
+    # The "Steady state found" message is the canonical success log line.
+    assert any('Steady state found' in r.getMessage() for r in solver_records), (
+        "Expected 'Steady state found' info record; got messages: "
+        f"{[r.getMessage() for r in solver_records]}"
+    )
 
 
 def test_solver_instance_has_solver_kwargs_attr():

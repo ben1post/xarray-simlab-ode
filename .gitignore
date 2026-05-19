@@ -144,3 +144,5 @@ dmypy.json
 # Testfolder for docs
 /tmp
 docs/_api_generated
+XSO_HANDOFF.md
+SESSION_STARTER.md

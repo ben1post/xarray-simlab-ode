@@ -29,6 +29,16 @@
   warning, not one per scan cell). Suppress entirely with
   `IVPSolver._nfev_warned = True` before model setup, or via
   `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
+- `xso.update_setup` is now re-exported at the package top level
+  (previously only accessible via `xso.xsimlabwrappers.update_setup`).
+  Behaviour change: when `new_solver_kwargs` is omitted, the
+  `Core__solver_kwargs` slot is now **cleared** so the new solver
+  falls back to its class-level `DEFAULT_SOLVER_KWARGS`. Previously
+  the slot was preserved from the old setup, which silently leaked
+  solver-specific kwargs (e.g. `method='LSODA'` from `solve_ivp`)
+  into incompatible solver families (e.g. `fsolve`). Pass
+  `new_solver_kwargs={...}` to set kwargs explicitly across the
+  update.
 - Configurable IVP instability-event thresholds + diagnostic warning.
   The hardcoded safety thresholds (`< -1e-6` lower bound, `> 1e50`
   upper bound) on the terminal instability event are now exposed via
@@ -47,6 +57,18 @@
   informative — a parscan with many cells that trip will emit one
   warning per cell). Suppress via
   `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
+
+### Changed — Solver diagnostics
+
+- Solver-internal diagnostics (initial state dumps, residual norms,
+  Jacobian status, convergence outcomes, eigenvalue summaries) now
+  flow through the `xso.solvers` logger instead of `print()`. Silent
+  by default; enable with standard logging configuration, e.g.
+  `logging.getLogger('xso.solvers').setLevel(logging.INFO)`. Single
+  runs no longer require `redirect_stdout` to quiet `FSolver` /
+  `NumericalStabilitySolver` / `HydridStabilitySolver` chatter, and
+  the corresponding band-aid in
+  `xso.parscans._run_model_scan_stability` has been removed.
 
 ### Added — Parameter scans (`xso.parscans` module)
 

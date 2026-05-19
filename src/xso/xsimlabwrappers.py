@@ -166,9 +166,15 @@ def update_setup(model, old_setup, new_solver, new_time=None,
     new_solver_kwargs : dict or None, optional
         Extra keyword arguments forwarded to the new solver's underlying
         call (see :func:`setup`). When ``None`` (default), the
-        ``Core__solver_kwargs`` slot on ``old_setup`` is left unchanged,
-        so the previous solver's kwargs carry over. Pass an empty dict
-        ``{}`` to explicitly clear them.
+        ``Core__solver_kwargs`` slot is **cleared** so the new solver
+        falls back to its class-level ``DEFAULT_SOLVER_KWARGS``. This
+        avoids the footgun where solver-specific kwargs from the
+        previous setup (e.g. ``{'method': 'LSODA'}`` for ``solve_ivp``)
+        leak into a different solver family (e.g. ``fsolve``) that does
+        not accept them. To carry kwargs across an update, extract them
+        from ``old_setup`` and pass them explicitly. Passing ``{}`` is
+        equivalent to the default and is the explicit way to write
+        "use defaults".
 
     Returns
     -------
@@ -181,12 +187,17 @@ def update_setup(model, old_setup, new_solver, new_time=None,
     else:
         time = new_time
 
-    # See note in setup(): solver_kwargs travels as a JSON-encoded string
-    # so it survives xsimlab's zarr persistence step.
-    input_vars = {'Core__solver_type': new_solver,
-                  'Time__time_input': time}
-    if new_solver_kwargs is not None:
-        input_vars['Core__solver_kwargs'] = json.dumps(new_solver_kwargs)
+    # Clear solver_kwargs by default (new_solver_kwargs=None -> {}) so
+    # solver-specific kwargs from the previous solver cannot silently
+    # reach a new solver family that does not accept them. See note in
+    # setup(): the slot travels as a JSON-encoded string for zarr
+    # serializability.
+    new_kwargs = new_solver_kwargs if new_solver_kwargs is not None else {}
+    input_vars = {
+        'Core__solver_type': new_solver,
+        'Core__solver_kwargs': json.dumps(new_kwargs),
+        'Time__time_input': time,
+    }
 
     if new_solver != "stepwise":
         with model:

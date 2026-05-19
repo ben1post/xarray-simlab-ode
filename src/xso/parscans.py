@@ -7,7 +7,9 @@ import numpy as np
 from multiprocessing import Pool
 from IPython.display import clear_output
 import os
-from contextlib import redirect_stdout, nullcontext
+# (redirect_stdout / nullcontext previously used to suppress solver
+# diagnostics; no longer needed since the solvers log through
+# xso.solvers' logger instead of writing to stdout.)
 
 # Suppress warnings that clutter output, especially common in scientific computing libraries
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -712,15 +714,15 @@ def _run_model_scan_stability(task_data):
     # Create stability hook
     hook = StabilityAnalysisHook()
 
-    # (This is the hard-coded suppression from your script)
-    ctx_manager = redirect_stdout(open(os.devnull, 'w'))
-
-    # Run the Model with stability hook *inside* the context manager
-    with ctx_manager:
-        with model:
-            model_out = model_setup.xsimlab.update_vars(
-                input_vars=scan_param_dict
-            ).xsimlab.run(hooks=[hook])
+    # Solver-internal diagnostics now flow through the xso.solvers
+    # logger rather than stdout, so per-cell output is silent by
+    # default (no stdout redirection needed). Callers who want to see
+    # convergence warnings can configure logging in the worker, e.g.
+    # by setting XSO_LOG_LEVEL in the worker initializer.
+    with model:
+        model_out = model_setup.xsimlab.update_vars(
+            input_vars=scan_param_dict
+        ).xsimlab.run(hooks=[hook])
 
     scalar_coords = {
         p_name: p_value for p_name, p_value in scan_param_dict.items()

@@ -1,3 +1,4 @@
+import logging
 import warnings
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -9,6 +10,23 @@ from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 
 from .model import return_dim_ndarray
+
+
+# Module-level logger. Solvers emit diagnostic output through this
+# logger instead of print(), so callers can control verbosity via
+# Python's standard logging configuration without ad-hoc stdout
+# redirection. Conventions:
+#   - logger.debug:   chatty state-vector dumps, per-step diagnostics
+#   - logger.info:    high-level progress (steady state found, etc.)
+#   - logger.warning: convergence failures, NaN/Inf in Jacobians
+#   - logger.error:   unrecoverable evaluation failures
+# No handler is attached by default, so XSO is silent unless the caller
+# configures logging:
+#
+#     import logging
+#     logging.basicConfig(level=logging.INFO)
+#     logging.getLogger('xso.solvers').setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def to_ndarray(value):
@@ -547,7 +565,7 @@ class FSolver(IVPSolver):
 
         # Flatten initial values into a 1D vector
         state_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()]], axis=None)
-        print("InitState", state_init)
+        logger.debug("Initial state vector: %r", state_init)
 
         # fsolve expects a function of y -> dy/dt, so we wrap model_function properly
         def rhs_steady(y):
@@ -563,14 +581,14 @@ class FSolver(IVPSolver):
                                           full_output=True, **kwargs)
 
         if ier != 1:
-            print(f"[WARNING] fsolve did not converge: {msg}")
-            print("YSTEADY", y_steady)
+            logger.warning("fsolve did not converge: %s "
+                           "(last iterate: %r)", msg, y_steady)
             y_steady[:] = np.nan
         else:
-            print("[INFO] Steady state found with residual norm:",
-                  np.linalg.norm(rhs_steady(y_steady)))
-            print("Residuals:", info['fvec'])  # Should be close to 0
-            print("YSTEADY", y_steady)
+            logger.info("Steady state found, residual norm = %.3e",
+                        np.linalg.norm(rhs_steady(y_steady)))
+            logger.debug("Residuals: %r", info['fvec'])
+            logger.debug("Steady state vector: %r", y_steady)
 
         # Broadcast steady-state solution across time steps
         n_time = len(model.time)
@@ -734,8 +752,8 @@ class OLDNumericalStabilitySolver(IVPSolver):
         state_init = np.concatenate([[v for key, val in self.var_init.items()
                                       if key != 'time'
                                       for v in val.ravel()]], axis=None)
-        print(f"[INFO] Initial state dimension: {len(state_init)}")
-        print(f"[INFO] Initial state: {state_init}")
+        logger.info("Initial state dimension: %d", len(state_init))
+        logger.debug("Initial state vector: %r", state_init)
 
         # fsolve expects a function of y -> dy/dt, so we wrap model_function properly
         def rhs_steady(y):
@@ -756,49 +774,54 @@ class OLDNumericalStabilitySolver(IVPSolver):
                                           full_output=True, **kwargs)
 
         if ier != 1:
-            print(f"[WARNING] fsolve did not converge: {msg}")
-            print(f"  Final state: {y_steady}")
             residual_norm = np.linalg.norm(rhs_steady(y_steady))
-            print(f"  Residual norm: {residual_norm:.2e}")
+            logger.warning("fsolve did not converge: %s "
+                           "(residual norm = %.2e, last iterate = %r)",
+                           msg, residual_norm, y_steady)
             # Set to NaN if not converged
             if residual_norm > 1e-3:  # Tolerance for accepting non-converged solution
                 y_steady[:] = np.nan
                 converged = False
             else:
-                print(f"[INFO] Accepting solution with residual norm {residual_norm:.2e}")
+                logger.info("Accepting non-converged solution "
+                            "(residual norm = %.2e)", residual_norm)
                 converged = True
         else:
             converged = True
             residual_norm = np.linalg.norm(rhs_steady(y_steady))
-            print(f"[INFO] Steady state found with residual norm: {residual_norm:.2e}")
-            print(f"  Steady state: {y_steady}")
+            logger.info("Steady state found, residual norm = %.2e",
+                        residual_norm)
+            logger.debug("Steady state vector: %r", y_steady)
 
         # ========================================
         # Step 2: Compute Jacobian numerically (from FunctionalBifurcationSolver)
         # ========================================
 
         if converged and not np.any(np.isnan(y_steady)):
-            print("[INFO] Computing Jacobian numerically...")
+            logger.info("Computing Jacobian numerically...")
 
             # Numerical Jacobian computation using finite differences
             J = self._numerical_jacobian(rhs_steady, y_steady)
 
             # Check for NaN/Inf in Jacobian
             if np.any(np.isnan(J)) or np.any(np.isinf(J)):
-                print(f"[WARNING] Jacobian contains NaN or Inf values")
-                print(f"  NaN count: {np.sum(np.isnan(J))}")
-                print(f"  Inf count: {np.sum(np.isinf(J))}")
+                logger.warning("Jacobian contains non-finite values: "
+                               "%d NaN, %d Inf",
+                               int(np.sum(np.isnan(J))),
+                               int(np.sum(np.isinf(J))))
                 eigvals_computed = np.full(len(y_steady), np.nan)
             else:
                 # Compute eigenvalues
                 try:
                     eigvals_computed = eigvals(J)
-                    print(f"[INFO] Successfully computed {len(eigvals_computed)} eigenvalues")
+                    logger.info("Computed %d eigenvalues",
+                                len(eigvals_computed))
                 except Exception as e:
-                    print(f"[WARNING] Eigenvalue computation failed: {e}")
+                    logger.warning("Eigenvalue computation failed: %s", e)
                     eigvals_computed = np.full(len(y_steady), np.nan)
         else:
-            print("[WARNING] Skipping Jacobian computation due to convergence failure")
+            logger.warning("Skipping Jacobian computation due to "
+                           "convergence failure")
             eigvals_computed = np.full(len(state_init), np.nan)
 
         # ========================================
@@ -889,7 +912,8 @@ class OLDNumericalStabilitySolver(IVPSolver):
 
 
 
-        print(model.variables.items())
+        logger.debug("Model variables at solve exit: %r",
+                     list(model.variables.items()))
 
     def _numerical_jacobian(self, f, y_steady, eps=1e-8):
         """
@@ -948,24 +972,18 @@ class OLDNumericalStabilitySolver(IVPSolver):
         converged : bool
             Whether steady state search converged
         """
-        print("-" * 60)
-        print("NUMERICAL STABILITY ANALYSIS RESULTS")
-        print("-" * 60)
-        print(f"Steady State: {y_steady}")
-        print(f"Convergence: {'Success' if converged else 'Failed'}")
+        lines = [
+            "Numerical stability analysis results",
+            f"  Steady state: {y_steady}",
+            f"  Convergence:  {'Success' if converged else 'Failed'}",
+        ]
 
         if converged and len(eigvals) > 0 and np.all(np.isfinite(eigvals)):
-            # Analyze eigenvalues
             real_parts = np.real(eigvals)
             imag_parts = np.imag(eigvals)
 
             max_real = np.max(real_parts)
             min_real = np.min(real_parts)
-
-            print(f"\nEigenvalue Analysis:")
-            print(f"  Number of eigenvalues: {len(eigvals)}")
-            print(f"  Max real part: {max_real:.4e}")
-            print(f"  Min real part: {min_real:.4e}")
 
             # Determine stability (from FunctionalBifurcationSolver)
             if max_real < -1e-9:
@@ -975,36 +993,45 @@ class OLDNumericalStabilitySolver(IVPSolver):
             else:
                 stability = "MARGINALLY STABLE"
 
-            print(f"\nStability: {stability} (max real part: {max_real:.4e})")
+            n_positive = int(np.sum(real_parts > 1e-9))
+            n_negative = int(np.sum(real_parts < -1e-9))
+            n_zero = int(np.sum(np.abs(real_parts) <= 1e-9))
+            n_complex = int(np.sum(np.abs(imag_parts) > 1e-10))
 
-            # Count eigenvalue types
-            n_positive = np.sum(real_parts > 1e-9)
-            n_negative = np.sum(real_parts < -1e-9)
-            n_zero = np.sum(np.abs(real_parts) <= 1e-9)
-
-            print(f"  Positive real parts: {n_positive}")
-            print(f"  Negative real parts: {n_negative}")
-            print(f"  Near-zero real parts: {n_zero}")
-
-            # Check for oscillatory behavior
-            n_complex = np.sum(np.abs(imag_parts) > 1e-10)
+            lines.extend([
+                f"  Eigenvalues:  {len(eigvals)} computed; "
+                f"max Re = {max_real:.4e}, min Re = {min_real:.4e}",
+                f"  Stability:    {stability} (max real part = {max_real:.4e})",
+                f"  Counts:       {n_positive} positive, "
+                f"{n_negative} negative, {n_zero} near-zero real parts",
+            ])
             if n_complex > 0:
-                print(f"  Complex eigenvalue pairs: {n_complex // 2}")
-                max_frequency = np.max(np.abs(imag_parts))
-                print(f"  Max oscillation frequency: {max_frequency:.4f}")
+                lines.append(
+                    f"  Oscillation:  {n_complex // 2} complex pairs, "
+                    f"max |Im| = {np.max(np.abs(imag_parts)):.4f}"
+                )
 
-            # Print first few eigenvalues for inspection
+            # First few eigenvalues for inspection.
             n_show = min(5, len(eigvals))
-            print(f"\n  First {n_show} eigenvalues:")
+            eig_lines = []
             for i in range(n_show):
                 if abs(imag_parts[i]) > 1e-10:
-                    print(f"    λ_{i + 1} = {real_parts[i]:.4e} ± {abs(imag_parts[i]):.4e}i")
+                    eig_lines.append(
+                        f"    λ_{i + 1} = {real_parts[i]:.4e} "
+                        f"± {abs(imag_parts[i]):.4e}i"
+                    )
                 else:
-                    print(f"    λ_{i + 1} = {real_parts[i]:.4e}")
+                    eig_lines.append(
+                        f"    λ_{i + 1} = {real_parts[i]:.4e}"
+                    )
+            lines.append(f"  First {n_show} eigenvalues:\n"
+                         + "\n".join(eig_lines))
         else:
-            print(f"\nEigenvalues: Could not compute (converged={converged})")
+            lines.append(
+                f"  Eigenvalues:  could not compute (converged={converged})"
+            )
 
-        print("-" * 60)
+        logger.info("\n".join(lines))
 
 
 class NumericalStabilitySolver(IVPSolver):
@@ -1047,8 +1074,8 @@ class NumericalStabilitySolver(IVPSolver):
         state_init = np.concatenate([[v for key, val in self.var_init.items()
                                       if key != 'time'
                                       for v in val.ravel()]], axis=None)
-        print(f"[INFO] Initial state dimension: {len(state_init)}")
-        print(f"[INFO] Initial state: {state_init}")
+        logger.info("Initial state dimension: %d", len(state_init))
+        logger.debug("Initial state vector: %r", state_init)
 
         # fsolve expects a function of y -> dy/dt, so we wrap model_function properly
         def rhs_steady(y):
@@ -1069,49 +1096,54 @@ class NumericalStabilitySolver(IVPSolver):
                                           full_output=True, **kwargs)
 
         if ier != 1:
-            print(f"[WARNING] fsolve did not converge: {msg}")
-            print(f"  Final state: {y_steady}")
             residual_norm = np.linalg.norm(rhs_steady(y_steady))
-            print(f"  Residual norm: {residual_norm:.2e}")
+            logger.warning("fsolve did not converge: %s "
+                           "(residual norm = %.2e, last iterate = %r)",
+                           msg, residual_norm, y_steady)
             # Set to NaN if not converged
             if residual_norm > 1e-3:  # Tolerance for accepting non-converged solution
                 y_steady[:] = np.nan
                 converged = False
             else:
-                print(f"[INFO] Accepting solution with residual norm {residual_norm:.2e}")
+                logger.info("Accepting non-converged solution "
+                            "(residual norm = %.2e)", residual_norm)
                 converged = True
         else:
             converged = True
             residual_norm = np.linalg.norm(rhs_steady(y_steady))
-            print(f"[INFO] Steady state found with residual norm: {residual_norm:.2e}")
-            print(f"  Steady state: {y_steady}")
+            logger.info("Steady state found, residual norm = %.2e",
+                        residual_norm)
+            logger.debug("Steady state vector: %r", y_steady)
 
         # ========================================
         # Step 2: Compute Jacobian numerically (from FunctionalBifurcationSolver)
         # ========================================
 
         if converged and not np.any(np.isnan(y_steady)):
-            print("[INFO] Computing Jacobian numerically...")
+            logger.info("Computing Jacobian numerically...")
 
             # Numerical Jacobian computation using finite differences
             J = self._numerical_jacobian(rhs_steady, y_steady)
 
             # Check for NaN/Inf in Jacobian
             if np.any(np.isnan(J)) or np.any(np.isinf(J)):
-                print(f"[WARNING] Jacobian contains NaN or Inf values")
-                print(f"  NaN count: {np.sum(np.isnan(J))}")
-                print(f"  Inf count: {np.sum(np.isinf(J))}")
+                logger.warning("Jacobian contains non-finite values: "
+                               "%d NaN, %d Inf",
+                               int(np.sum(np.isnan(J))),
+                               int(np.sum(np.isinf(J))))
                 eigvals_computed = np.full(len(y_steady), np.nan)
             else:
                 # Compute eigenvalues
                 try:
                     eigvals_computed = eigvals(J)
-                    print(f"[INFO] Successfully computed {len(eigvals_computed)} eigenvalues")
+                    logger.info("Computed %d eigenvalues",
+                                len(eigvals_computed))
                 except Exception as e:
-                    print(f"[WARNING] Eigenvalue computation failed: {e}")
+                    logger.warning("Eigenvalue computation failed: %s", e)
                     eigvals_computed = np.full(len(y_steady), np.nan)
         else:
-            print("[WARNING] Skipping Jacobian computation due to convergence failure")
+            logger.warning("Skipping Jacobian computation due to "
+                           "convergence failure")
             eigvals_computed = np.full(len(state_init), np.nan)
 
         # ========================================
@@ -1253,24 +1285,18 @@ class NumericalStabilitySolver(IVPSolver):
         converged : bool
             Whether steady state search converged
         """
-        print("-" * 60)
-        print("NUMERICAL STABILITY ANALYSIS RESULTS")
-        print("-" * 60)
-        print(f"Steady State: {y_steady}")
-        print(f"Convergence: {'Success' if converged else 'Failed'}")
+        lines = [
+            "Numerical stability analysis results",
+            f"  Steady state: {y_steady}",
+            f"  Convergence:  {'Success' if converged else 'Failed'}",
+        ]
 
         if converged and len(eigvals) > 0 and np.all(np.isfinite(eigvals)):
-            # Analyze eigenvalues
             real_parts = np.real(eigvals)
             imag_parts = np.imag(eigvals)
 
             max_real = np.max(real_parts)
             min_real = np.min(real_parts)
-
-            print(f"\nEigenvalue Analysis:")
-            print(f"  Number of eigenvalues: {len(eigvals)}")
-            print(f"  Max real part: {max_real:.4e}")
-            print(f"  Min real part: {min_real:.4e}")
 
             # Determine stability (from FunctionalBifurcationSolver)
             if max_real < -1e-9:
@@ -1280,36 +1306,45 @@ class NumericalStabilitySolver(IVPSolver):
             else:
                 stability = "MARGINALLY STABLE"
 
-            print(f"\nStability: {stability} (max real part: {max_real:.4e})")
+            n_positive = int(np.sum(real_parts > 1e-9))
+            n_negative = int(np.sum(real_parts < -1e-9))
+            n_zero = int(np.sum(np.abs(real_parts) <= 1e-9))
+            n_complex = int(np.sum(np.abs(imag_parts) > 1e-10))
 
-            # Count eigenvalue types
-            n_positive = np.sum(real_parts > 1e-9)
-            n_negative = np.sum(real_parts < -1e-9)
-            n_zero = np.sum(np.abs(real_parts) <= 1e-9)
-
-            print(f"  Positive real parts: {n_positive}")
-            print(f"  Negative real parts: {n_negative}")
-            print(f"  Near-zero real parts: {n_zero}")
-
-            # Check for oscillatory behavior
-            n_complex = np.sum(np.abs(imag_parts) > 1e-10)
+            lines.extend([
+                f"  Eigenvalues:  {len(eigvals)} computed; "
+                f"max Re = {max_real:.4e}, min Re = {min_real:.4e}",
+                f"  Stability:    {stability} (max real part = {max_real:.4e})",
+                f"  Counts:       {n_positive} positive, "
+                f"{n_negative} negative, {n_zero} near-zero real parts",
+            ])
             if n_complex > 0:
-                print(f"  Complex eigenvalue pairs: {n_complex // 2}")
-                max_frequency = np.max(np.abs(imag_parts))
-                print(f"  Max oscillation frequency: {max_frequency:.4f}")
+                lines.append(
+                    f"  Oscillation:  {n_complex // 2} complex pairs, "
+                    f"max |Im| = {np.max(np.abs(imag_parts)):.4f}"
+                )
 
-            # Print first few eigenvalues for inspection
+            # First few eigenvalues for inspection.
             n_show = min(5, len(eigvals))
-            print(f"\n  First {n_show} eigenvalues:")
+            eig_lines = []
             for i in range(n_show):
                 if abs(imag_parts[i]) > 1e-10:
-                    print(f"    λ_{i + 1} = {real_parts[i]:.4e} ± {abs(imag_parts[i]):.4e}i")
+                    eig_lines.append(
+                        f"    λ_{i + 1} = {real_parts[i]:.4e} "
+                        f"± {abs(imag_parts[i]):.4e}i"
+                    )
                 else:
-                    print(f"    λ_{i + 1} = {real_parts[i]:.4e}")
+                    eig_lines.append(
+                        f"    λ_{i + 1} = {real_parts[i]:.4e}"
+                    )
+            lines.append(f"  First {n_show} eigenvalues:\n"
+                         + "\n".join(eig_lines))
         else:
-            print(f"\nEigenvalues: Could not compute (converged={converged})")
+            lines.append(
+                f"  Eigenvalues:  could not compute (converged={converged})"
+            )
 
-        print("-" * 60)
+        logger.info("\n".join(lines))
 
     def _compute_stability_results(self, y_steady, eigvals, converged):
         """
@@ -2012,39 +2047,40 @@ class HydridStabilitySolver(SolverABC):
         if not state_vars:
             raise RuntimeError("No state variables found for Jacobian calculation")
 
-        print(f"[DEBUG] Computing Jacobian: {len(state_eqs)} equations, {len(state_vars)} variables")
+        logger.debug("Computing Jacobian: %d equations, %d variables",
+                     len(state_eqs), len(state_vars))
 
         # Check for problematic expressions before computing Jacobian
         for i, eq in enumerate(state_eqs[:2]):  # Just check first 2
-            print(f"[DEBUG] Sample equation {i}: {str(eq)[:200]}")
+            logger.debug("Sample equation %d: %s", i, str(eq)[:200])
 
         jacobian_matrix = sympy.Matrix(state_eqs).jacobian(state_vars)
 
-        print(f"[DEBUG] Jacobian computed, shape: {jacobian_matrix.shape}")
-
-
+        logger.debug("Jacobian computed, shape: %s", jacobian_matrix.shape)
 
         try:
             # For smaller models, try full simplification
             if jacobian_matrix.shape[0] <= 4:
-                print(f"[DEBUG] Attempting Jacobian simplification...")
+                logger.debug("Attempting Jacobian simplification...")
                 jacobian_matrix = jacobian_matrix.applyfunc(
                     lambda x: sympy.cancel(x) if x != 0 else x
                 )
                 simplification_success = True
-                print(f"[DEBUG] Jacobian simplified successfully")
+                logger.debug("Jacobian simplified successfully")
             else:
-                print(f"[DEBUG] Model too large, no attempt at Jacobian simplification...")
+                logger.debug("Model too large, skipping Jacobian "
+                             "simplification")
                 simplification_success = False
         except KeyboardInterrupt:
-            print(f"[WARNING] Simplification interrupted by user")
-            print(f"[INFO] Proceeding with unsimplified Jacobian")
+            logger.warning("Simplification interrupted by user; "
+                           "proceeding with unsimplified Jacobian")
         except Exception as e:
-            print(f"[WARNING] Could not simplify Jacobian: {e}")
-            print(f"[INFO] Proceeding with unsimplified Jacobian")
+            logger.warning("Could not simplify Jacobian (%s); "
+                           "proceeding with unsimplified Jacobian", e)
 
         if not simplification_success:
-            print(f"[INFO] Will automatically use numerical Jacobian for eigenvalues if needed")
+            logger.info("Will use numerical Jacobian for eigenvalues "
+                        "if needed")
 
         # Lambdify for numerical evaluation
         try:
@@ -2059,13 +2095,14 @@ class HydridStabilitySolver(SolverABC):
                 modules='numpy'
             )
         except Exception as e:
-            print("ERROR during lambdification")
+            logger.error("Lambdification failed: %s", e)
             # Only print on error - these can be huge
             # print(f"ODE equations: {ode_eqs}")
             # print(f"Jacobian: {jacobian_matrix}")
             raise RuntimeError(f"Lambdification failed: {e}")
 
-        print("[BifurcationSolver] Model assembled and lambdified successfully")
+        logger.info("HybridStabilitySolver: model assembled and "
+                    "lambdified successfully")
 
     def _find_steady_state(self):
         """Find steady state using fsolve with Jacobian."""
@@ -2083,10 +2120,10 @@ class HydridStabilitySolver(SolverABC):
                 f"Available: {list(self.param_values_map.keys())}"
             )
 
-        print(f"[DEBUG] Initial state size: {len(self.var_init_flat)}")
-        print(f"[DEBUG] Initial state: {self.var_init_flat}")
-        print(f"[DEBUG] Param values size: {len(param_values)}")
-        print(f"[DEBUG] Param values: {param_values}")
+        logger.debug("Initial state size: %d", len(self.var_init_flat))
+        logger.debug("Initial state: %r", self.var_init_flat)
+        logger.debug("Param values size: %d", len(param_values))
+        logger.debug("Param values: %r", param_values)
 
         def rhs_steady(y_state):
             """Right-hand side for steady state (dy/dt = 0)."""
@@ -2097,10 +2134,10 @@ class HydridStabilitySolver(SolverABC):
                 result = np.array(derivs[1:], dtype=float)
                 return result
             except Exception as e:
-                print(f"[ERROR] RHS evaluation failed")
-                print(f"  y_state: {y_state}")
-                print(f"  y_full length: {len(y_full)}")
-                print(f"  param_values length: {len(param_values)}")
+                logger.error("RHS evaluation failed: %s "
+                             "(y_state=%r, y_full length=%d, "
+                             "param_values length=%d)",
+                             e, y_state, len(y_full), len(param_values))
                 raise RuntimeError(f"RHS evaluation failed: {e}")
 
         def jac_steady(y_state):
@@ -2110,38 +2147,36 @@ class HydridStabilitySolver(SolverABC):
                 jac = self.jac_func(y_full, param_values)
                 return np.array(jac, dtype=float)
             except Exception as e:
-                print(f"[ERROR] Jacobian evaluation failed")
-                print(f"  y_state: {y_state}")
-                print(f"  y_full length: {len(y_full)}")
-                print(f"  param_values length: {len(param_values)}")
+                logger.error("Jacobian evaluation failed: %s "
+                             "(y_state=%r, y_full length=%d, "
+                             "param_values length=%d)",
+                             e, y_state, len(y_full), len(param_values))
                 raise RuntimeError(f"Jacobian evaluation failed: {e}")
 
         # Test the functions before calling fsolve
-        print("[DEBUG] Testing RHS at initial state...")
+        logger.debug("Testing RHS at initial state...")
         try:
             rhs_init = rhs_steady(self.var_init_flat)
-            print(f"[DEBUG] RHS at initial state: {rhs_init}")
-            print(f"[DEBUG] RHS norm: {np.linalg.norm(rhs_init)}")
+            logger.debug("RHS at initial state: %r "
+                         "(norm = %.4e)", rhs_init,
+                         np.linalg.norm(rhs_init))
         except Exception as e:
-            print(f"[ERROR] RHS test failed: {e}")
+            logger.error("RHS test failed: %s", e)
             raise
 
-        print("[DEBUG] Testing Jacobian at initial state...")
+        logger.debug("Testing Jacobian at initial state...")
         try:
             pass
             #jac_init = jac_steady(self.var_init_flat)
-            #print(f"[DEBUG] Jacobian shape: {jac_init.shape}")
-            #print(f"[DEBUG] Jacobian dtype: {jac_init.dtype}")
-            #print(f"[DEBUG] Jacobian contains NaN: {np.any(np.isnan(jac_init))}")
-            #print(f"[DEBUG] Jacobian contains Inf: {np.any(np.isinf(jac_init))}")
-            #print(f"[DEBUG] Jacobian min/max: {np.min(jac_init)}, {np.max(jac_init)}")
-            #print(f"[DEBUG] Jacobian sample (first 3x3):\n{jac_init[:3, :3]}")
+            #logger.debug("Jacobian shape: %s", jac_init.shape)
+            #logger.debug("Jacobian dtype: %s", jac_init.dtype)
+            #logger.debug("Jacobian sample (first 3x3): %r", jac_init[:3, :3])
         except Exception as e:
-            print(f"[ERROR] Jacobian test failed: {e}")
+            logger.error("Jacobian test failed: %s", e)
             raise
 
         # Solve for steady state
-        print("[DEBUG] Starting fsolve...")
+        logger.debug("Starting fsolve...")
         n_states = len(self.var_init_flat)
         # Set your desired threshold (e.g., <= 4 states use analytical)
         jacobian_threshold = 4
@@ -2155,7 +2190,7 @@ class HydridStabilitySolver(SolverABC):
 
         if not use_analytical:
             # Use numerical Jacobian approximation (more robust)
-            print("[DEBUG] Using numerical Jacobian approximation...")
+            logger.debug("Using numerical Jacobian approximation...")
             y_steady, info, ier, msg = fsolve(
                 rhs_steady,
                 self.var_init_flat,
@@ -2164,7 +2199,7 @@ class HydridStabilitySolver(SolverABC):
             )
         else:
             # Try analytical Jacobian (currently has NaN issues)
-            print("[DEBUG] Using analytical Jacobian...")
+            logger.debug("Using analytical Jacobian...")
             y_steady, info, ier, msg = fsolve(
                 rhs_steady,
                 self.var_init_flat,
@@ -2175,20 +2210,26 @@ class HydridStabilitySolver(SolverABC):
 
         converged = (ier == 1)
         if not converged:
-            print(f"[WARNING] fsolve did not converge: {msg}")
-            print(f"  Initial guess: {self.var_init_flat}")
-            print(f"  Final attempt: {y_steady}")
             try:
                 residual = rhs_steady(y_steady)
-                print(f"  Residual: {residual}")
-                print(f"  Residual norm: {np.linalg.norm(residual)}")
-            except:
-                print(f"  Could not evaluate residual")
+                residual_str = (
+                    f"residual={residual!r}, "
+                    f"residual norm={np.linalg.norm(residual):.4e}"
+                )
+            except Exception:
+                residual_str = "could not evaluate residual"
+            logger.warning(
+                "fsolve did not converge: %s "
+                "(initial guess=%r, last iterate=%r, %s)",
+                msg, self.var_init_flat, y_steady, residual_str,
+            )
             y_steady = np.full_like(self.var_init_flat, np.nan)
         else:
-            print(f"[INFO] Steady state found!")
-            print(f"  Steady state: {y_steady}")
-            print(f"  Residual norm: {np.linalg.norm(rhs_steady(y_steady))}")
+            logger.info(
+                "Steady state found, residual norm = %.4e",
+                np.linalg.norm(rhs_steady(y_steady)),
+            )
+            logger.debug("Steady state vector: %r", y_steady)
 
         return y_steady, converged, jac_steady
 
@@ -2204,22 +2245,27 @@ class HydridStabilitySolver(SolverABC):
 
             # Check for NaN/Inf in Jacobian
             if np.any(np.isnan(J_numerical)) or np.any(np.isinf(J_numerical)):
-                print(f"[WARNING] Analytical Jacobian contains NaN or Inf values")
-                print(f"  NaN count: {np.sum(np.isnan(J_numerical))}")
-                print(f"  Inf count: {np.sum(np.isinf(J_numerical))}")
-                print(f"[INFO] Falling back to numerical Jacobian approximation for eigenvalues...")
+                logger.warning(
+                    "Analytical Jacobian contains non-finite values "
+                    "(%d NaN, %d Inf); falling back to numerical "
+                    "approximation for eigenvalues",
+                    int(np.sum(np.isnan(J_numerical))),
+                    int(np.sum(np.isinf(J_numerical))),
+                )
 
                 # Compute Jacobian numerically using finite differences
                 J_numerical = self._numerical_jacobian(y_steady)
 
                 if np.any(np.isnan(J_numerical)) or np.any(np.isinf(J_numerical)):
-                    print(f"[ERROR] Numerical Jacobian also has NaN/Inf!")
+                    logger.error(
+                        "Numerical Jacobian also contains non-finite values"
+                    )
                     return np.full(n_states, np.nan)
 
             eigvals = LA.eigvals(J_numerical)
             return eigvals
         except Exception as e:
-            print(f"[WARNING] Eigenvalue computation failed: {e}")
+            logger.warning("Eigenvalue computation failed: %s", e)
             return np.full(n_states, np.nan)
 
     def _numerical_jacobian(self, y_steady, eps=1e-8):
@@ -2260,32 +2306,31 @@ class HydridStabilitySolver(SolverABC):
         return J
 
     def _print_stability_analysis(self, y_steady, eigvals, converged):
-        """Print steady state and stability analysis results."""
-        print("-" * 50)
-        print("BIFURCATION ANALYSIS RESULTS")
-        print("-" * 50)
-        print(f"Steady State: {y_steady}")
-        print(f"Convergence: {'Success' if converged else 'Failed'}")
+        """Log steady state and stability analysis results."""
+        lines = [
+            "Bifurcation analysis results",
+            f"  Steady state: {y_steady}",
+            f"  Convergence:  {'Success' if converged else 'Failed'}",
+        ]
 
         if converged and len(eigvals) > 0 and np.all(np.isfinite(eigvals)):
-            #print(f"\nEigenvalues: {eigvals}")
-            #print(f"  Real parts: {np.real(eigvals)}")
-            #print(f"  Imaginary parts: {np.imag(eigvals)}")
-
             max_real = np.max(np.real(eigvals))
-
             if max_real < -1e-9:
                 stability = "STABLE"
             elif max_real > 1e-9:
                 stability = "UNSTABLE"
             else:
                 stability = "MARGINALLY STABLE"
-
-            print(f"\nStability: {stability} (max real part: {max_real:.4e})")
+            lines.append(
+                f"  Stability:    {stability} "
+                f"(max real part = {max_real:.4e})"
+            )
         else:
-            print(f"\nEigenvalues: Could not compute (converged={converged})")
+            lines.append(
+                f"  Eigenvalues:  could not compute (converged={converged})"
+            )
 
-        print("-" * 50)
+        logger.info("\n".join(lines))
 
     def _store_results(self, model, y_steady):
         """Store steady state results in model arrays."""
@@ -2328,9 +2373,11 @@ class HydridStabilitySolver(SolverABC):
                 try:
                     val_array[...] = state_dict[var_key]
                 except ValueError as e:
-                    print(
-                        f"[ERROR] Shape mismatch for variable '{var_key}': "
-                        f"expected {val_array.shape}, got {state_dict[var_key].shape}. {e}"
+                    logger.error(
+                        "Shape mismatch for variable '%s': "
+                        "expected %s, got %s (%s)",
+                        var_key, val_array.shape,
+                        state_dict[var_key].shape, e,
                     )
 
         # Zero out flux values
