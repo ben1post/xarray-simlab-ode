@@ -189,6 +189,20 @@ class IVPSolver(SolverABC):
     #: warnings, not 30).
     _nfev_warned = False
 
+    #: Default lower bound on state values for the instability event.
+    #: If any element of the integrated state drops below this value,
+    #: the run is terminated and a UserWarning is emitted naming the
+    #: offending variable. Override per-run via ``solver_kwargs[
+    #: 'instability_neg_threshold']``; set to ``float('-inf')`` to
+    #: disable the negative-side check entirely.
+    DEFAULT_NEG_THRESHOLD = -1e-6
+
+    #: Default upper bound on state values for the instability event.
+    #: If any element exceeds this value, the run is terminated.
+    #: Override per-run via ``solver_kwargs['instability_pos_threshold']``;
+    #: set to ``float('inf')`` to disable the positive-side check.
+    DEFAULT_POS_THRESHOLD = 1e50
+
     def __init__(self, solver_kwargs=None):
         super().__init__(solver_kwargs)
         self.var_init = defaultdict()
@@ -284,19 +298,26 @@ class IVPSolver(SolverABC):
         full_init = np.concatenate([[v for val in self.var_init.values() for v in val.ravel()],
                                     [v for val in self.flux_init.values() for v in val.ravel()]], axis=None)
 
+        # Merge class-level defaults with user-supplied solver_kwargs.
+        # User-supplied keys win on collision (see SolverABC docstring).
+        # Pop XSO-internal kwargs (instability event thresholds) BEFORE
+        # forwarding the remainder to scipy.integrate.solve_ivp — scipy
+        # would otherwise raise on the unknown kwarg names.
+        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
+        neg_threshold = kwargs.pop('instability_neg_threshold',
+                                   self.DEFAULT_NEG_THRESHOLD)
+        pos_threshold = kwargs.pop('instability_pos_threshold',
+                                   self.DEFAULT_POS_THRESHOLD)
+
         def instability_event(t, y):
             if np.any(np.isnan(y)) or np.any(np.isinf(y)):
                 return 0  # Trigger event
-            if np.any(y < -1e-6) or np.any(y > 1e50):  # Arbitrary upper bound
+            if np.any(y < neg_threshold) or np.any(y > pos_threshold):
                 return 0
             return 1  # No event
 
         instability_event.terminal = True
         instability_event.direction = 0
-
-        # Merge class-level defaults with user-supplied solver_kwargs.
-        # User-supplied keys win on collision (see SolverABC docstring).
-        kwargs = {**self.DEFAULT_SOLVER_KWARGS, **self.solver_kwargs}
 
         # solving model here:
         full_model_out = solve_ivp(model.model_function,
@@ -332,10 +353,14 @@ class IVPSolver(SolverABC):
                 stacklevel=2,
             )
 
-        # if full_model_out.t_events[0].size > 0:
-        #     print("Event triggered at t =", full_model_out.t_events[0])
-        # else:
-        #     print("No event detected")
+        # Event-fire diagnostic: when scipy reports status==1 the
+        # terminal instability event fired. Identify the state variable
+        # that tripped it and warn (per fire, not once-per-process —
+        # each parscan cell that trips it is independently informative).
+        if full_model_out.status == 1:
+            self._warn_on_instability_event(
+                model, full_model_out, neg_threshold, pos_threshold,
+            )
 
         # expected number of time steps:
         n_expected_timesteps = len(model.time)
@@ -402,6 +427,101 @@ class IVPSolver(SolverABC):
     def cleanup(self):
         """Empty cleanup method, not necessary for this solver."""
         pass
+
+    def _warn_on_instability_event(self, model, result,
+                                   neg_threshold, pos_threshold):
+        """Emit a UserWarning naming the state variable that tripped the
+        instability event.
+
+        Called from :meth:`solve` when ``scipy.integrate.solve_ivp``
+        reports ``status==1`` (terminal event fired). Uses
+        :meth:`Model.unpack_flat_state` to map the post-event flat state
+        vector back to component-named pieces, then picks the most
+        informative violator (NaN/inf trumps numeric; else most
+        negative).
+
+        Per-fire — does not deduplicate across runs. Each parscan cell
+        that trips the event is independently informative, and users
+        who find this noisy can ``warnings.filterwarnings('ignore',
+        category=UserWarning, module='xso.solvers')``.
+        """
+        # Defensive guards: with terminal=True and status==1 these
+        # should always be populated, but bail clean if scipy behaves
+        # unexpectedly rather than raising on top of the original
+        # diagnostic situation.
+        if not result.t_events or len(result.t_events[0]) == 0:
+            return
+        if not result.y_events or len(result.y_events[0]) == 0:
+            return
+
+        t_event = float(result.t_events[0][0])
+        y_event = np.asarray(result.y_events[0][0])
+
+        # Demux flat state -> {component_label: scalar_or_array}.
+        state = model.unpack_flat_state(y_event)
+
+        # Collect every entry that violates the thresholds or is
+        # non-finite. Each entry: (label, sub_index_or_None, value).
+        violations = []
+        for label, value in state.items():
+            arr = np.asarray(value)
+            violating = (
+                ~np.isfinite(arr)
+                | (arr < neg_threshold)
+                | (arr > pos_threshold)
+            )
+            if not np.any(violating):
+                continue
+            if arr.ndim == 0:
+                violations.append((label, None, float(arr)))
+            else:
+                for idx in np.argwhere(violating):
+                    sub = tuple(int(i) for i in idx)
+                    violations.append((label, sub, float(arr[sub])))
+
+        if not violations:
+            # Edge case: event fired but the state recorded at event
+            # time shows no current violation (can happen when the
+            # violating value crossed back before scipy logged the
+            # event state). Generic message rather than silence.
+            warnings.warn(
+                f"Instability event triggered at t={t_event:.4g} "
+                f"(no specific violator identified at event time). "
+                f"Run terminated, remaining time points NaN-padded.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return
+
+        # Pick the most informative violator: NaN/inf trumps numeric,
+        # otherwise the most-negative value (signed comparison, so
+        # large negative beats large positive).
+        def _severity(v):
+            _, _, val = v
+            if not np.isfinite(val):
+                return (0, 0.0)   # NaN / inf -> highest severity
+            return (1, val)       # else: sort by signed value
+
+        worst_label, worst_sub, worst_val = min(violations, key=_severity)
+        sub_str = (
+            f"[{','.join(str(i) for i in worst_sub)}]"
+            if worst_sub is not None else ""
+        )
+        others = (
+            f" (plus {len(violations) - 1} other violating entries)"
+            if len(violations) > 1 else ""
+        )
+
+        warnings.warn(
+            f"Instability event triggered at t={t_event:.4g} on "
+            f"{worst_label}{sub_str} = {worst_val:.3g}{others}. "
+            f"Run terminated, remaining time points NaN-padded. "
+            f"To loosen the safety threshold pass "
+            f"solver_kwargs={{'instability_neg_threshold': -1e-3}} "
+            f"to xso.setup; to disable, pass float('-inf').",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class FSolver(IVPSolver):

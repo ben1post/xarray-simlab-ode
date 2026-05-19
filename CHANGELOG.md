@@ -29,6 +29,24 @@
   warning, not one per scan cell). Suppress entirely with
   `IVPSolver._nfev_warned = True` before model setup, or via
   `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
+- Configurable IVP instability-event thresholds + diagnostic warning.
+  The hardcoded safety thresholds (`< -1e-6` lower bound, `> 1e50`
+  upper bound) on the terminal instability event are now exposed via
+  `solver_kwargs`: `instability_neg_threshold` and
+  `instability_pos_threshold` (defaults
+  `IVPSolver.DEFAULT_NEG_THRESHOLD` and `IVPSolver.DEFAULT_POS_THRESHOLD`).
+  These XSO-internal kwargs are popped from the merged kwargs dict
+  before forwarding the remainder to `scipy.integrate.solve_ivp`.
+  Pass `float('-inf')` / `float('inf')` to disable either side.
+  When the event fires, a `UserWarning` now names the state variable
+  that tripped it, e.g. *"Instability event triggered at t=172.4 on
+  P[0] = -2.3e-6. Run terminated, remaining time points NaN-padded.
+  To loosen the safety threshold pass solver_kwargs={
+  'instability_neg_threshold': -1e-3} to xso.setup; to disable,
+  pass float('-inf')."* Per-fire (each event firing is independently
+  informative — a parscan with many cells that trip will emit one
+  warning per cell). Suppress via
+  `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
 
 ### Added — Parameter scans (`xso.parscans` module)
 

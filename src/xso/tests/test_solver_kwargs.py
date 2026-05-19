@@ -348,6 +348,93 @@ def test_nfev_warning_quiet_on_well_behaved_model(monkeypatch):
     )
 
 
+# -----------------------------------------------------------------------------
+# Instability event — configurable thresholds + diagnostic warning
+# -----------------------------------------------------------------------------
+
+def test_instability_event_warning_names_offending_variable(monkeypatch):
+    """When solve_ivp reports a terminal event (status=1), the diagnostic
+    warning identifies the state variable that tripped it.
+
+    Triggered via a monkeypatched solve_ivp that synthesizes the event
+    arrays. Engineering a deterministic real-solver trip is awkward
+    because the time pseudo-variable is part of the state and grows
+    monotonically; this test isolates the warning logic from that
+    complication.
+    """
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(rhs, t_span, y0, t_eval=None, events=None, **kwargs):
+        # Run the real solver to get a properly-shaped scipy result,
+        # then patch in event data.
+        result = real_solve_ivp(
+            rhs, t_span, y0,
+            t_eval=t_eval, events=events, **kwargs,
+        )
+        result.status = 1
+        result.t_events = [np.array([0.5])]
+        # y0 layout: [time, x] per Model variable ordering
+        # (Time component is the first add_variable call).
+        y_event = np.asarray(y0, dtype=float).copy()
+        y_event[1] = -1e-4   # x has gone slightly negative
+        result.y_events = [y_event.reshape(1, -1)]
+        return result
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)  # silence stiffness
+
+    model, setup = _build_setup()
+
+    with pytest.warns(UserWarning) as record:
+        with model:
+            setup.xsimlab.run()
+
+    event_warnings = [
+        w for w in record
+        if 'Instability event triggered' in str(w.message)
+    ]
+    assert event_warnings, (
+        f"Expected an Instability-event UserWarning; got: "
+        f"{[str(w.message) for w in record]}"
+    )
+    msg = str(event_warnings[0].message)
+    assert 'x' in msg, f"Warning should name the offending variable 'x'; got: {msg}"
+    assert 'instability_neg_threshold' in msg, (
+        "Warning should instruct how to loosen the threshold; got: " + msg
+    )
+
+
+def test_instability_threshold_kwargs_stripped_before_scipy(monkeypatch):
+    """``instability_neg_threshold`` and ``instability_pos_threshold`` are
+    XSO-internal kwargs and must be popped from the merged kwargs dict
+    before the remainder is forwarded to scipy.integrate.solve_ivp,
+    which would otherwise raise ``TypeError: unexpected keyword``.
+    """
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model, setup = _build_setup(solver_kwargs={
+        'instability_neg_threshold': -1e-3,
+        'instability_pos_threshold': 1e60,
+        'rtol': 1e-4,
+    })
+    with model:
+        setup.xsimlab.run()
+
+    # XSO-internal kwargs are stripped before forwarding to scipy.
+    assert 'instability_neg_threshold' not in captured
+    assert 'instability_pos_threshold' not in captured
+    # rtol is a scipy kwarg and DOES reach solve_ivp.
+    assert captured.get('rtol') == 1e-4
+
+
 def test_solver_instance_has_solver_kwargs_attr():
     """Every built-in solver, when instantiated with no kwargs, still
     exposes a ``solver_kwargs`` attribute equal to ``{}`` — important
