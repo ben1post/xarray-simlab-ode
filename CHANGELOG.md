@@ -23,12 +23,16 @@
 - Diagnostic `UserWarning` when scipy's step controller does
   disproportionately many RHS evaluations per output point on the
   IVP solver (default threshold: 100 evaluations per output point,
-  configurable via `IVPSolver.NFEV_WARN_RATIO`). Suggests tolerance
-  loosening or switching to `method='LSODA'`. Fires at most once per
-  Python process (so each forked parscan worker emits at most one
-  warning, not one per scan cell). Suppress entirely with
-  `IVPSolver._nfev_warned = True` before model setup, or via
-  `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
+  configurable via `IVPSolver.NFEV_WARN_RATIO`). Recommends
+  switching to `solver='stiff_ivp'` (a BDF-default bundle for
+  moderately stiff systems — see entry below), or, as a one-line
+  tweak on the existing solver, `solver_kwargs={'method': 'BDF',
+  'rtol': 1e-4}`; alternatively suggests loosening tolerances.
+  Fires at most once per Python process (so each forked parscan
+  worker emits at most one warning, not one per scan cell). Suppress
+  entirely with `IVPSolver._nfev_warned = True` before model setup,
+  or via `warnings.filterwarnings('ignore', category=UserWarning,
+  module='xso.solvers')`.
 - `xso.update_setup` is now re-exported at the package top level
   (previously only accessible via `xso.xsimlabwrappers.update_setup`).
   Behaviour change: when `new_solver_kwargs` is omitted, the
@@ -57,6 +61,50 @@
   informative — a parscan with many cells that trip will emit one
   warning per cell). Suppress via
   `warnings.filterwarnings('ignore', category=UserWarning, module='xso.solvers')`.
+- `solver='stiff_ivp'` — new built-in solver name registered in
+  `xso.core._built_in_solvers`, resolving to a `StiffIVPSolver`
+  subclass of `IVPSolver` with stiff-system defaults
+  `{'method': 'BDF', 'rtol': 1e-4, 'atol': 1e-9}`. Inherits the
+  full `IVPSolver` behaviour (instability event, post-run and
+  in-run stiffness diagnostics, `trace_steps` opt-in, JSON-string
+  plumbing for `Core__solver_kwargs`); overrides only the defaults
+  plus a one-shot `UserWarning` when handed a non-stiff scipy
+  method (`'RK45'` / `'RK23'` / `'DOP853'`). The integration still
+  proceeds with the user-supplied method — the warning surfaces
+  the inconsistency rather than hiding it. Empirically verified
+  that LSODA's auto-stiff heuristic mis-classifies moderately
+  stiff size-spectrum systems and stays in non-stiff (Adams)
+  mode, where BDF reduces `nfev` by ~300× on the same regime;
+  the bundle exists so the right default is one solver name
+  away, not five `solver_kwargs` keys away.
+- In-run stiffness alert on `IVPSolver` (inherited by
+  `StiffIVPSolver`). The RHS function is wrapped with a step
+  counter; every `IVPSolver.INRUN_CHECK_INTERVAL` (default
+  `10_000`) calls, the projected total `nfev` is computed from
+  current progress through `model.time`, and a one-shot
+  `UserWarning` fires mid-integration when the projection exceeds
+  `IVPSolver.INRUN_PREDICTED_NFEV_WARN` (default `1_000_000`).
+  Unit-independent by construction (the time span normalises
+  away). Override per-run via
+  `solver_kwargs={'inrun_alert_threshold': N}`; set to
+  `float('inf')` to disable. Once-per-process semantics parallel
+  the existing post-run `_nfev_warned`. The pre-existing post-run
+  diagnostic is preserved as a backstop — together the two cover
+  *"this run will be slow"* (in-run) and *"this run was slow"*
+  (post-run).
+- `trace_steps` opt-in solver_kwarg on `IVPSolver`. Setting
+  `solver_kwargs={'trace_steps': True}` emits one INFO record
+  through `logging.getLogger('xso.solvers')` at end of run with
+  the per-quartile RHS-call breakdown across the time span, e.g.
+  *"trace_steps: n_calls=12345, RHS calls per quartile of
+  t_span=[0, 5000]: [950, 2200, 3800, 5395] (early-to-late; cost
+  concentrates early if [high, ..., low], late if [low, ...,
+  high])."* Diagnoses whether the step controller's work
+  concentrates in an early transient, spreads evenly, or piles up
+  late (the atol-driven noise-floor pattern documented for
+  matched-Type-II grazing setups). Silent by default; XSO-internal
+  kwarg, popped before the remainder is forwarded to
+  `scipy.integrate.solve_ivp`.
 
 ### Changed — Solver diagnostics
 

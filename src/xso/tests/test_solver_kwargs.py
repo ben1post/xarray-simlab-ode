@@ -516,3 +516,379 @@ def test_solver_instance_has_solver_kwargs_attr():
         inst = cls()
         assert hasattr(inst, 'solver_kwargs')
         assert inst.solver_kwargs == {}
+
+
+# -----------------------------------------------------------------------------
+# Stage (a) — post-run stiffness warning text now suggests 'BDF' rather
+# than 'LSODA'. Empirically (np_setups.py matched-TypeII), LSODA's
+# auto-stiff heuristic stays in non-stiff (Adams) mode on moderately
+# stiff systems and takes hundreds of thousands of small steps where
+# BDF needs hundreds — so the warning's recommendation needs to match
+# what actually helps.
+# -----------------------------------------------------------------------------
+
+def test_stiffness_warning_message_suggests_BDF(monkeypatch):
+    """The post-run stiffness warning text recommends method='BDF'
+    with rtol=1e-4 (the empirically-validated choice), and explains why
+    'LSODA' is not the right default suggestion."""
+    monkeypatch.setattr(_solvers.IVPSolver, 'NFEV_WARN_RATIO', 0.0)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', False)
+
+    model, setup = _build_setup()
+    with pytest.warns(UserWarning) as record:
+        with model:
+            setup.xsimlab.run()
+
+    stiffness = [w for w in record if 'step controller' in str(w.message)]
+    assert stiffness, (
+        f"Expected stiffness warning; got: {[str(w.message) for w in record]}"
+    )
+    msg = str(stiffness[0].message)
+    assert "'BDF'" in msg, (
+        f"Stiffness warning should suggest method='BDF'; got: {msg}"
+    )
+    assert "'rtol': 1e-4" in msg, (
+        f"Stiffness warning should suggest rtol=1e-4; got: {msg}"
+    )
+    # And the rationale for the previous LSODA suggestion no longer
+    # being the recommended choice should be in the message body.
+    assert "auto-stiff heuristic" in msg, (
+        f"Stiffness warning should explain why 'LSODA' isn't the "
+        f"recommended fix; got: {msg}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Stage (a) — ``trace_steps`` opt-in: pop semantics + summary log line
+# -----------------------------------------------------------------------------
+
+def test_trace_steps_stripped_before_scipy(monkeypatch):
+    """``trace_steps`` is an XSO-internal kwarg, popped before
+    forwarding the remainder to scipy.integrate.solve_ivp."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    # Silence the unrelated post-run stiffness warning if it would
+    # otherwise fire on this micro-model under default tolerances.
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model, setup = _build_setup(solver_kwargs={'trace_steps': True})
+    with model:
+        setup.xsimlab.run()
+
+    assert 'trace_steps' not in captured
+
+
+def test_trace_steps_logs_summary(caplog):
+    """``trace_steps=True`` emits one INFO record on ``xso.solvers``
+    containing the per-quartile RHS-call breakdown."""
+    model, setup = _build_setup(solver_kwargs={'trace_steps': True})
+    with caplog.at_level(logging.INFO, logger='xso.solvers'):
+        with model:
+            setup.xsimlab.run()
+
+    trace_records = [
+        r for r in caplog.records
+        if r.name == 'xso.solvers' and 'trace_steps' in r.getMessage()
+    ]
+    assert trace_records, (
+        f"Expected one xso.solvers INFO record containing 'trace_steps'; "
+        f"got: {[(r.name, r.getMessage()) for r in caplog.records]}"
+    )
+    msg = trace_records[0].getMessage()
+    assert 'n_calls=' in msg
+    assert 'quartile' in msg
+
+
+def test_trace_steps_silent_by_default(caplog):
+    """Without ``trace_steps=True``, no step-trace INFO line is emitted."""
+    model, setup = _build_setup()      # no trace_steps in solver_kwargs
+    with caplog.at_level(logging.INFO, logger='xso.solvers'):
+        with model:
+            setup.xsimlab.run()
+
+    trace_records = [
+        r for r in caplog.records
+        if r.name == 'xso.solvers' and 'trace_steps' in r.getMessage()
+    ]
+    assert trace_records == [], (
+        f"Expected no 'trace_steps' records when flag is off; "
+        f"got: {[r.getMessage() for r in trace_records]}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Stage (a) — in-run stiffness alert: pop semantics + projection logic
+# -----------------------------------------------------------------------------
+
+def test_inrun_alert_threshold_stripped_before_scipy(monkeypatch):
+    """``inrun_alert_threshold`` is an XSO-internal kwarg, popped
+    before forwarding the remainder to scipy."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+    monkeypatch.setattr(_solvers.IVPSolver, '_inrun_warned', True)
+
+    model, setup = _build_setup(
+        solver_kwargs={'inrun_alert_threshold': 1e9},
+    )
+    with model:
+        setup.xsimlab.run()
+
+    assert 'inrun_alert_threshold' not in captured
+
+
+def test_inrun_alert_fires_when_projection_exceeds_threshold(monkeypatch):
+    """When the projected total nfev exceeds the threshold, the in-run
+    alert fires mid-integration as a UserWarning. Class-level knobs
+    lowered so the alert fires deterministically on the trivial
+    exponential-decay test model."""
+    # Check on every RHS call, arm immediately (no warm-up), reset the
+    # once-per-process guard so the test is repeatable in a session.
+    monkeypatch.setattr(_solvers.IVPSolver, 'INRUN_CHECK_INTERVAL', 1)
+    monkeypatch.setattr(_solvers.IVPSolver, 'INRUN_MIN_PROGRESS_FRAC', 0.0)
+    monkeypatch.setattr(_solvers.IVPSolver, '_inrun_warned', False)
+    # Silence the unrelated post-run stiffness warning.
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model, setup = _build_setup(
+        solver_kwargs={'inrun_alert_threshold': 1.0},
+    )
+    with pytest.warns(UserWarning, match="at this rate"):
+        with model:
+            setup.xsimlab.run()
+
+
+def test_inrun_alert_threshold_inf_disables(monkeypatch):
+    """Setting ``inrun_alert_threshold=float('inf')`` disables the
+    in-run alert even when knobs are tuned so it would otherwise fire."""
+    monkeypatch.setattr(_solvers.IVPSolver, 'INRUN_CHECK_INTERVAL', 1)
+    monkeypatch.setattr(_solvers.IVPSolver, 'INRUN_MIN_PROGRESS_FRAC', 0.0)
+    monkeypatch.setattr(_solvers.IVPSolver, '_inrun_warned', False)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model, setup = _build_setup(
+        solver_kwargs={'inrun_alert_threshold': float('inf')},
+    )
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter('always')
+        with model:
+            setup.xsimlab.run()
+
+    in_run = [w for w in caught if 'at this rate' in str(w.message)]
+    assert in_run == [], (
+        "In-run alert should not fire when threshold is +inf; got: "
+        f"{[str(w.message) for w in in_run]}"
+    )
+
+
+def test_inrun_alert_silent_on_well_behaved_model(monkeypatch):
+    """At the default threshold (1e6), a trivial exponential-decay
+    model does not trip the in-run alert. The check interval (10_000
+    calls) is much larger than this model's total nfev, so the alert's
+    projection logic never runs — exactly the intended behaviour for
+    well-behaved runs."""
+    monkeypatch.setattr(_solvers.IVPSolver, '_inrun_warned', False)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+    # Class-level INRUN_* constants left at production defaults.
+
+    model, setup = _build_setup()
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter('always')
+        with model:
+            setup.xsimlab.run()
+
+    in_run = [w for w in caught if 'at this rate' in str(w.message)]
+    assert in_run == [], (
+        "In-run alert should not fire on a trivial decay model at "
+        f"default settings; got: {[str(w.message) for w in in_run]}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Stage (b) — ``solver='stiff_ivp'``: a BDF-default IVPSolver subclass
+# for moderately stiff dissipative systems. Defaults bundle only at
+# this stage; sparse Jacobian, per-class atol, and QSS termination
+# event are tracked separately and will land on this class without
+# changing the user-facing API.
+# -----------------------------------------------------------------------------
+
+def test_stiff_ivp_in_registry():
+    """``'stiff_ivp'`` is a built-in solver name resolving to
+    :class:`StiffIVPSolver`."""
+    from xso.core import _built_in_solvers
+    assert 'stiff_ivp' in _built_in_solvers, (
+        f"'stiff_ivp' should be registered as a built-in solver; "
+        f"registry keys: {sorted(_built_in_solvers)}"
+    )
+    assert _built_in_solvers['stiff_ivp'] is _solvers.StiffIVPSolver
+
+
+def test_stiff_ivp_defaults_to_BDF(monkeypatch):
+    """``solver='stiff_ivp'`` with no solver_kwargs dispatches to
+    scipy with ``method='BDF'`` and rtol=1e-4 (the bundle's defaults)."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    # Silence unrelated diagnostics so they don't add noise to the
+    # captured kwargs assertion.
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+    )
+    with model:
+        setup.xsimlab.run()
+
+    assert captured.get('method') == 'BDF'
+    assert captured.get('rtol') == 1e-4
+    assert captured.get('atol') == 1e-9
+
+
+def test_stiff_ivp_user_method_overrides_default(monkeypatch):
+    """User-supplied ``solver_kwargs={'method': 'LSODA'}`` wins over
+    the stiff_ivp bundle's BDF default — the bundle is opinionated by
+    its defaults, not by enforcement."""
+    captured = {}
+    real_solve_ivp = _solvers.solve_ivp
+
+    def fake_solve_ivp(*args, **kwargs):
+        captured.update(kwargs)
+        return real_solve_ivp(*args, **kwargs)
+
+    monkeypatch.setattr(_solvers, 'solve_ivp', fake_solve_ivp)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+    monkeypatch.setattr(_solvers.StiffIVPSolver,
+                        '_nonstiff_method_warned', True)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+        solver_kwargs={'method': 'LSODA'},
+    )
+    with model:
+        setup.xsimlab.run()
+
+    assert captured.get('method') == 'LSODA'      # user wins
+    assert captured.get('rtol') == 1e-4           # bundle default kept
+    assert captured.get('atol') == 1e-9           # bundle default kept
+
+
+def test_stiff_ivp_warns_on_non_stiff_method(monkeypatch):
+    """Supplying a non-stiff explicit-RK method (RK45 / RK23 / DOP853)
+    on ``solver='stiff_ivp'`` emits a one-shot UserWarning explaining
+    why the choice is inconsistent with the bundle's intent. The
+    integration still proceeds with the user-supplied method."""
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+    monkeypatch.setattr(_solvers.StiffIVPSolver,
+                        '_nonstiff_method_warned', False)
+
+    model = xso.create({'X': _Linear})
+    setup = xso.setup(
+        solver='stiff_ivp',
+        model=model,
+        time=np.arange(0.0, 2.0, 1.0),
+        input_vars={
+            'X__var_label': 'x',
+            'X__var_init': 1.0,
+            'X__rate': 1.0,
+        },
+        solver_kwargs={'method': 'RK45'},
+    )
+    with pytest.warns(UserWarning, match="non-stiff scipy method"):
+        with model:
+            setup.xsimlab.run()
+
+
+def test_stiff_ivp_silent_on_stiff_methods(monkeypatch):
+    """Radau and LSODA are implicit / auto-stiff methods and do not
+    trigger the non-stiff-method warning, even though they aren't the
+    bundle's default."""
+    for method in ('Radau', 'LSODA'):
+        monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', True)
+        monkeypatch.setattr(_solvers.StiffIVPSolver,
+                            '_nonstiff_method_warned', False)
+
+        model = xso.create({'X': _Linear})
+        setup = xso.setup(
+            solver='stiff_ivp',
+            model=model,
+            time=np.arange(0.0, 2.0, 1.0),
+            input_vars={
+                'X__var_label': 'x',
+                'X__var_init': 1.0,
+                'X__rate': 1.0,
+            },
+            solver_kwargs={'method': method},
+        )
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            with model:
+                setup.xsimlab.run()
+
+        nonstiff_warnings = [
+            w for w in caught
+            if 'non-stiff scipy method' in str(w.message)
+        ]
+        assert nonstiff_warnings == [], (
+            f"method={method!r} should NOT trip the non-stiff-method "
+            f"warning on solver='stiff_ivp'; got: "
+            f"{[str(w.message) for w in nonstiff_warnings]}"
+        )
+
+
+def test_post_run_stiffness_warning_mentions_stiff_ivp(monkeypatch):
+    """The post-run stiffness diagnostic warning recommends
+    ``solver='stiff_ivp'`` as the primary fix now that the bundle
+    exists, while still preserving the ``method='BDF'`` one-line
+    alternative for users who prefer not to switch solver."""
+    monkeypatch.setattr(_solvers.IVPSolver, 'NFEV_WARN_RATIO', 0.0)
+    monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', False)
+
+    model, setup = _build_setup()
+    with pytest.warns(UserWarning) as record:
+        with model:
+            setup.xsimlab.run()
+
+    stiffness = [w for w in record if 'step controller' in str(w.message)]
+    assert stiffness, (
+        f"Expected stiffness warning; got: {[str(w.message) for w in record]}"
+    )
+    msg = str(stiffness[0].message)
+    assert "'stiff_ivp'" in msg, (
+        f"Post-run stiffness warning should suggest solver='stiff_ivp'; "
+        f"got: {msg}"
+    )
+    # The one-line BDF fallback should still be there.
+    assert "'BDF'" in msg, f"Expected BDF still mentioned; got: {msg}"

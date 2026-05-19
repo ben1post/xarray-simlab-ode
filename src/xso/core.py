@@ -1,10 +1,11 @@
 import time as tm
 
 from xso.model import Model
-from xso.solvers import (SolverABC, IVPSolver, StepwiseSolver, FSolver,
+from xso.solvers import (SolverABC, IVPSolver, StiffIVPSolver, StepwiseSolver, FSolver,
                          DerivativeCalculator, NumericalStabilitySolver, HydridStabilitySolver)
 
-_built_in_solvers = {'solve_ivp': IVPSolver, 'fsolve': FSolver, 'deriv': DerivativeCalculator,
+_built_in_solvers = {'solve_ivp': IVPSolver, 'stiff_ivp': StiffIVPSolver,
+                     'fsolve': FSolver, 'deriv': DerivativeCalculator,
                      'stepwise': StepwiseSolver,
                      'stability': NumericalStabilitySolver, 'hybrid_stability': HydridStabilitySolver}
 
