@@ -527,10 +527,10 @@ def test_solver_instance_has_solver_kwargs_attr():
 # what actually helps.
 # -----------------------------------------------------------------------------
 
-def test_stiffness_warning_message_suggests_BDF(monkeypatch):
-    """The post-run stiffness warning text recommends method='BDF'
-    with rtol=1e-4 (the empirically-validated choice), and explains why
-    'LSODA' is not the right default suggestion."""
+def test_stiffness_warning_message_content(monkeypatch):
+    """The post-run stiffness warning text recommends
+    solver='stiff_ivp' (mentioning BDF in the description) and a
+    loose-tolerances kwargs alternative with rtol=1e-4."""
     monkeypatch.setattr(_solvers.IVPSolver, 'NFEV_WARN_RATIO', 0.0)
     monkeypatch.setattr(_solvers.IVPSolver, '_nfev_warned', False)
 
@@ -544,17 +544,13 @@ def test_stiffness_warning_message_suggests_BDF(monkeypatch):
         f"Expected stiffness warning; got: {[str(w.message) for w in record]}"
     )
     msg = str(stiffness[0].message)
-    assert "'BDF'" in msg, (
-        f"Stiffness warning should suggest method='BDF'; got: {msg}"
+    assert "BDF" in msg, (
+        f"Stiffness warning should mention BDF in the stiff_ivp "
+        f"description; got: {msg}"
     )
     assert "'rtol': 1e-4" in msg, (
-        f"Stiffness warning should suggest rtol=1e-4; got: {msg}"
-    )
-    # And the rationale for the previous LSODA suggestion no longer
-    # being the recommended choice should be in the message body.
-    assert "auto-stiff heuristic" in msg, (
-        f"Stiffness warning should explain why 'LSODA' isn't the "
-        f"recommended fix; got: {msg}"
+        f"Stiffness warning should include rtol=1e-4 in the "
+        f"loose-tolerances suggestion; got: {msg}"
     )
 
 
@@ -890,8 +886,9 @@ def test_post_run_stiffness_warning_mentions_stiff_ivp(monkeypatch):
         f"Post-run stiffness warning should suggest solver='stiff_ivp'; "
         f"got: {msg}"
     )
-    # The one-line BDF fallback should still be there.
-    assert "'BDF'" in msg, f"Expected BDF still mentioned; got: {msg}"
+    # BDF is mentioned in the stiff_ivp description ("BDF + auto-derived
+    # sparse Jacobian"), as unquoted prose rather than a kwarg value.
+    assert "BDF" in msg, f"Expected BDF still mentioned; got: {msg}"
 
 
 # -----------------------------------------------------------------------------

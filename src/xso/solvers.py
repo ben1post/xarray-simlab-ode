@@ -566,12 +566,15 @@ class IVPSolver(SolverABC):
                             f"of the time span — at this rate the run "
                             f"will use ~{predicted_total:.1e} total "
                             f"RHS calls. The integration may take a "
-                            f"long time; consider Ctrl-C and restarting "
-                            f"with solver='stiff_ivp' (BDF-default "
-                            f"stiff bundle), or solver_kwargs="
-                            f"{{'method': 'BDF', 'rtol': 1e-4}} on "
-                            f"this solver. (This warning fires once "
-                            f"per process.)",
+                            f"long time. Consider Ctrl-C and restarting "
+                            f"with solver='stiff_ivp' (BDF + "
+                            f"auto-derived sparse Jacobian; works well "
+                            f"for stiff dissipative systems). If you "
+                            f"are already on stiff_ivp and nfev is "
+                            f"still projecting high, the model is not "
+                            f"classically stiff — try solver='solve_ivp' "
+                            f"(RK45 default) instead. (This warning "
+                            f"fires once per process.)",
                             UserWarning,
                             stacklevel=2,
                         )
@@ -612,16 +615,11 @@ class IVPSolver(SolverABC):
                 f"for {n_out} output points ({ratio:.0f}/output). The "
                 f"step controller is working hard — common causes are "
                 f"stiff dynamics or noise-floor tracking under tight "
-                f"atol. Try switching to solver='stiff_ivp' (a "
-                f"BDF-default bundle for moderately stiff systems), "
-                f"or, for a one-line tweak on this solver, "
-                f"solver_kwargs={{'method': 'BDF', 'rtol': 1e-4}}; "
-                f"alternatively loosen tolerances with "
-                f"solver_kwargs={{'atol': 1e-6, 'rtol': 1e-4}}. Note "
-                f"that 'LSODA' relies on an auto-stiff heuristic "
-                f"that can mis-classify moderately stiff systems and "
-                f"stay in non-stiff (Adams) mode, so picking 'BDF' "
-                f"directly — or via 'stiff_ivp' — is more reliable. "
+                f"atol. Consider switching to solver='stiff_ivp' (BDF "
+                f"+ auto-derived sparse Jacobian; works well for stiff "
+                f"dissipative systems, may not for oscillatory "
+                f"predator-prey models), or loosening tolerances via "
+                f"solver_kwargs={{'atol': 1e-6, 'rtol': 1e-4}}. "
                 f"(This warning fires once per process.)",
                 UserWarning,
                 stacklevel=2,
