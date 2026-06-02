@@ -169,6 +169,11 @@ def parameter(foreign=False, setup_func=None, broadcast=False,
             "A foreign parameter references a broadcast parameter declared on "
             "another component; only the declaring (source) side uses broadcast=True."
         )
+    if setup_func is not None and broadcast is True:
+        raise ValueError(
+            "xso.parameter: setup_func cannot currently be combined with "
+            "broadcast=True."
+        )
 
     attrs = dict(attrs) if attrs is not None else {}
     # setup_func parameters are emitted with intent='out' (computed once at

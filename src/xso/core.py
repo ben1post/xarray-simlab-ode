@@ -100,6 +100,13 @@ class XSOCore:
 
     def add_parameter(self, label, value):
         """Method to add a parameter with the model backend, via implemented function in solver."""
+        if label in self.model.parameters:
+            raise Exception(
+                f"Parameter label '{label}' was registered twice. This usually "
+                f"means two components declared a broadcast parameter with the same "
+                f"label, or a broadcast label collided with an auto-generated "
+                f"'<Component>_<param>' label. Broadcast labels must be unique."
+            )
         self.model.parameters[label] = self.solver.add_parameter(label, value)
 
     def register_flux(self, label, flux, dims=None):

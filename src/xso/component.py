@@ -446,6 +446,10 @@ def _create_flux_inputargs_dict(cls, vars_dict):
             par_dim = var.metadata.get('dims')
             if var.metadata.get('foreign') is True:
                 par_label = getattr(cls, key)
+            elif var.metadata.get('setup_func') is not None:
+                par_label = cls.label + '_' + key
+            elif var.metadata.get('broadcast') is True:
+                par_label = getattr(cls, key + '_label')
             else:
                 par_label = cls.label + '_' + key
             input_arg_dict['pars'].append({'var': key, 'label': par_label, 'dim': par_dim})
