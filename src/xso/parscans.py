@@ -113,6 +113,54 @@ def _validate_fixed_overrides(fixed_overrides, scan_param_names):
         )
 
 
+def _validate_linked_overrides(linked_overrides, param_values, scan_param_names,
+                               fixed_overrides=None):
+    """Validate linked_overrides for a 1D trajectory scan.
+
+    Each linked parameter advances element-wise with the primary scan axis,
+    so every linked array must match ``len(param_values)``. Linked keys may
+    not name a scanned axis (that axis is already being varied) nor a
+    ``fixed_overrides`` key (that would set the same parameter two ways).
+    ``None`` is a no-op.
+    """
+    if not linked_overrides:
+        return
+    if not isinstance(linked_overrides, dict):
+        raise TypeError(
+            f"linked_overrides must be a dict mapping parameter name to a "
+            f"sequence, got {type(linked_overrides).__name__}."
+        )
+    n = len(param_values)
+    for key, values in linked_overrides.items():
+        try:
+            n_linked = len(values)
+        except TypeError:
+            raise TypeError(
+                f"linked_overrides['{key}'] must be a sized sequence of "
+                f"length {n}, got a non-sized {type(values).__name__}."
+            )
+        if n_linked != n:
+            raise ValueError(
+                f"linked_overrides['{key}'] has length {n_linked}, but "
+                f"param_values has length {n}. Linked parameters must share "
+                f"the primary scan axis element-wise."
+            )
+    scanned_collisions = [k for k in linked_overrides if k in scan_param_names]
+    if scanned_collisions:
+        raise ValueError(
+            f"linked_overrides contains parameter(s) also being scanned: "
+            f"{scanned_collisions}. A scanned axis cannot also be linked."
+        )
+    if fixed_overrides:
+        fixed_collisions = [k for k in linked_overrides if k in fixed_overrides]
+        if fixed_collisions:
+            raise ValueError(
+                f"linked_overrides and fixed_overrides share parameter(s): "
+                f"{fixed_collisions}. A parameter cannot be both linked and "
+                f"held fixed."
+            )
+
+
 def _worker_initializer(module_name, model_name_str, model_setup_name_str,
                         postprocess_name=None, postprocess_kwargs=None):
     """Initializes a worker process for multiprocessing.
@@ -238,16 +286,23 @@ def _run_model_scan_point(task_data):
 
 
 def _generate_iterable_tasks_1d(parameter, par_range,
-                                initial_values_ds=None, iv_mapping=None, fixed_overrides=None):
+                                initial_values_ds=None, iv_mapping=None, fixed_overrides=None,
+                                linked_overrides=None):
     """Creates the list of task dictionaries for a 1D parameter scan.
 
     Injects initial values only if they are finite AND biologically plausible.
+
+    ``linked_overrides`` (if given) maps parameter names to sequences the same
+    length as ``par_range``; at index ``i`` each linked value is injected
+    alongside the primary parameter, advancing element-wise with it (a
+    trajectory through parameter space, not a cross-product).
     """
     tasks = []
-    for val in par_range:
+    for i, val in enumerate(par_range):
         scan_dict = {parameter: val}
         if initial_values_ds is not None and iv_mapping is not None:
-            iv_point = initial_values_ds.sel({parameter: val}, method='nearest')
+            sel_val = _scalarize_param_for_coord(val)
+            iv_point = initial_values_ds.sel({parameter: sel_val}, method='nearest')
             for var_name, init_param_name in iv_mapping.items():
                 if var_name in iv_point:
                     iv_value = iv_point[var_name].values
@@ -274,6 +329,13 @@ def _generate_iterable_tasks_1d(parameter, par_range,
                 else:
                     print(f"Warning: '{var_name}' not found...")
 
+        # Linked parameters advance element-wise with the primary axis.
+        # Coerce to a plain Python float so update_vars and the coord logic
+        # treat them as scalars (not 0-d numpy arrays).
+        if linked_overrides:
+            for k in linked_overrides:
+                scan_dict[k] = float(linked_overrides[k][i])
+
         # Allow passing parameters to scan
         if fixed_overrides:
             scan_dict.update(fixed_overrides)
@@ -299,12 +361,19 @@ def _nan_template_like(ds):
     return out
 
 
-def _unpack_par_scan_1d(iterable_tasks, data):
+def _unpack_par_scan_1d(iterable_tasks, data, linked_overrides=None):
     """Combines the results from a 1D parameter scan into a single Dataset.
 
     ``None`` entries in ``data`` (failed cells) are replaced with a
     NaN-filled Dataset that matches the shape of the first successful
     cell, then re-coordinated so ``combine_by_coords`` aligns them.
+
+    ``linked_overrides`` (if given) names parameters that vary per scan
+    point. Their per-cell scalar copies are dropped and reattached as
+    coordinates indexed along ``scan_param_name``, sourced from the
+    authoritative arrays so they are correct and present even for failed
+    (NaN-filled) cells. Each cell carries its own linked value, so they
+    concatenate in lockstep with the scan axis regardless of ordering.
     """
     if not iterable_tasks or not data:
         return xr.Dataset()
@@ -317,15 +386,29 @@ def _unpack_par_scan_1d(iterable_tasks, data):
         print("[WARNING] All scan cells failed; returning empty Dataset.")
         return xr.Dataset()
 
+    linked_keys = list(linked_overrides) if linked_overrides else []
+
     dat_out = []
-    for dat, task in zip(data, iterable_tasks):
+    for i, (dat, task) in enumerate(zip(data, iterable_tasks)):
         if dat is None:
             dat = _nan_template_like(template)
-        scan_value = task['scan_param_dict'][scan_param_name]
-        dat_out.append(
-            dat.assign_coords({scan_param_name: scan_value})
-               .expand_dims(scan_param_name)
-        )
+        # Linked params vary per cell. Drop the per-cell scalar copy (left
+        # as a 0-d coord by _run_model_scan_point) -- it would collide as a
+        # conflicting non-dimension coord in combine_by_coords -- then
+        # reattach this cell's value as a length-1 coordinate along the scan
+        # axis so it concatenates in lockstep with scan_param_name.
+        if linked_keys:
+            dat = dat.drop_vars(linked_keys, errors='ignore')
+        scan_value = _scalarize_param_for_coord(
+            task['scan_param_dict'][scan_param_name])
+        dat = (dat.assign_coords({scan_param_name: scan_value})
+                  .expand_dims(scan_param_name))
+        if linked_keys:
+            dat = dat.assign_coords({
+                k: (scan_param_name, [float(linked_overrides[k][i])])
+                for k in linked_keys
+            })
+        dat_out.append(dat)
 
     return xr.combine_by_coords(dat_out)
 
@@ -516,7 +599,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     param_name2=None, param_values2=None,
                     model_name='model', model_setup_name='model_setup',
                     initial_values_ds=None, iv_mapping=None,
-                    fixed_overrides=None,
+                    fixed_overrides=None, linked_overrides=None,
                     postprocess_name=None, postprocess_kwargs=None):
     """
     Executes a 1D or 2D parallel parameter scan (using solve_ivp).
@@ -524,6 +607,17 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
     Parameters
     ----------
     ... (existing) ...
+    linked_overrides : dict or None, optional
+        Mapping of ``param_name -> sequence`` for a 1D *trajectory* scan:
+        each linked parameter advances element-wise with ``param_values``
+        rather than forming a cross-product (contrast ``param_name2``).
+        Every sequence must have length ``len(param_values)``. At scan
+        point ``i`` the applied inputs are ``{param_name: param_values[i]}``
+        plus ``{k: linked_overrides[k][i] for k}`` plus ``fixed_overrides``.
+        Linked keys must be disjoint from the scanned axes and from
+        ``fixed_overrides``. Linked values are returned as coordinates
+        indexed along ``param_name`` (present even for failed cells). Only
+        supported for 1D scans (``param_name2 is None``).
     postprocess_name : str or None, optional
         Name of a callable in the user's model module applied to each
         run's output Dataset inside the worker, before the result is
@@ -568,11 +662,20 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
     scan_params = [param_name] + ([param_name2] if param_name2 is not None else [])
     _validate_fixed_overrides(fixed_overrides, scan_params)
 
+    if linked_overrides and param_name2 is not None:
+        raise NotImplementedError(
+            "linked_overrides is only supported for 1D scans (param_name2 is "
+            "None). Linking onto a 2D (param_name2) scan is not implemented."
+        )
+    _validate_linked_overrides(linked_overrides, param_values, scan_params,
+                               fixed_overrides)
+
     if param_name2 is None:
         iter_scan = _generate_iterable_tasks_1d(
             param_name, param_values,
             initial_values_ds, iv_mapping,
             fixed_overrides,
+            linked_overrides=linked_overrides,
         )
         n_points = len(param_values)
 
@@ -596,7 +699,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             return None
 
         end = tm.time()
-        out_ds = _unpack_par_scan_1d(iter_scan, data)
+        out_ds = _unpack_par_scan_1d(iter_scan, data, linked_overrides=linked_overrides)
         print(f"1D Scan complete. Time taken: {round(end - start, 5)} seconds.")
         return out_ds
 
