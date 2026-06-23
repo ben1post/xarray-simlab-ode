@@ -1119,3 +1119,193 @@ def avg_tail(ds, avg_window=1000):
 
     out.attrs = ds.attrs
     return out
+
+
+# =============================================================================
+# Generic streaming task pool (model-agnostic) -- added 2026-06-22.
+#
+# run_xso_parscan sweeps ONE model over a parameter grid (shared base setup +
+# update_vars per cell). run_parallel_tasks is its sibling for the OTHER access
+# pattern: an iterable of INDEPENDENT, self-contained tasks (each builds its own
+# xso.setup and runs), dispatched across a process pool with results streaming
+# back as they finish. It knows nothing about the model, scoring, or output
+# schema -- the caller supplies an importable worker and an on_result hook.
+#
+# Use this when tasks differ by more than a parameter value (e.g. whole forcing
+# arrays per era), so there is no single base setup to update_vars from.
+#
+# Solver diagnostics (instability / stiffness UserWarnings, convergence logs)
+# stay a model-side concern: configure the `xso.solvers` logger at the top of
+# your model module so each worker inherits it at import (see handoff S11). The
+# driver deliberately does not reach into solver internals.
+# =============================================================================
+def _apply(packed):
+    """Top-level worker wrapper run inside each pool process.
+
+    Runs ``worker(*args)`` under try/except so one failure returns a sentinel
+    (carrying the task index) instead of crashing the pool -- the same
+    catch-and-return-sentinel contract as ``_run_model_scan_point`` returning
+    ``None``, but the index lets the parent map an unordered result back to its
+    task and build its own error record. Stays silent (no worker-side prints):
+    the parent owns the console, so error lines never interleave across workers.
+
+    Returns ``(index, ok, payload)`` -- on success ``payload`` is the worker's
+    return value; on failure ``ok`` is False and ``payload`` is the exception
+    repr.
+    """
+    index, worker, args = packed
+    try:
+        return index, True, worker(*args)
+    except Exception as e:
+        return index, False, repr(e)
+
+
+def _validate_parallel_inputs(worker, tasks):
+    """Pre-flight check in the main process, before any worker spawns.
+
+    Mirrors the spirit of ``_validate_model_loading``: fail fast with a clear
+    message rather than after pool start-up. Verifies the worker is callable and
+    importable by reference (spawn/forkserver workers re-import it -- a worker
+    defined in ``__main__`` or as a closure cannot be pickled), and that there
+    is work to do.
+    """
+    if not callable(worker):
+        raise TypeError(f"worker must be callable, got {type(worker).__name__}.")
+    qualname = getattr(worker, "__qualname__", "")
+    if getattr(worker, "__module__", None) == "__main__":
+        raise ValueError(
+            f"worker '{qualname}' is defined in __main__; spawn/forkserver "
+            f"workers re-import it by reference and cannot resolve __main__ "
+            f"functions. Move it into an importable module."
+        )
+    if "<locals>" in qualname:
+        raise ValueError(
+            f"worker '{qualname}' is a closure/local function and is not "
+            f"picklable. Make it a module-level function."
+        )
+    if len(tasks) == 0:
+        raise ValueError("tasks is empty -- nothing to run.")
+
+
+def run_parallel_tasks(worker, tasks, processes=None, on_result=None,
+                       progress=True, label="scan", tally_flags=None,
+                       abort_after_errors=None, pin_threads=True):
+    """Run an iterable of independent tasks across a process pool, streaming.
+
+    The model-agnostic sibling of ``run_xso_parscan`` for heterogeneous,
+    self-contained tasks. Results stream back via ``imap_unordered`` as each
+    finishes, so progress + ETA are live and the caller can persist
+    incrementally from the parent.
+
+    Parameters
+    ----------
+    worker : callable
+        An importable, module-level function (NOT a closure or ``__main__``
+        function -- spawn/forkserver workers re-import it by reference). Called
+        as ``worker(*task)``. Its defining module is imported once per worker
+        (cached), so heavy model construction at module import is amortised
+        across that worker's tasks -- the same amortisation
+        ``_worker_initializer`` gives ``run_xso_parscan``.
+    tasks : sequence of tuple
+        Each task is the positional-argument tuple for ``worker``. Must be
+        sized (``len`` is the progress denominator); a generator is materialised.
+    processes : int, optional
+        Pool size. Default ``os.cpu_count() - 1``.
+    on_result : callable, optional
+        Per-completion hook ``on_result(item, done, n)`` called in the PARENT
+        process (single writer -- safe for incremental save). ``item`` is a dict
+        ``{'index', 'ok', 'result'|'error'}``. Use it to score, assemble, and
+        dump the caller's own records. Return value is ignored.
+    progress : bool
+        If True, print one plain line per completion (count, error + flag
+        tallies, elapsed, ETA). Set False if the caller prints its own per-result
+        line in ``on_result``. Errors are surfaced regardless of this flag.
+    label : str
+        Tag shown in the progress lines / summary.
+    tally_flags : list of str, optional
+        Keys to count on successful result dicts (e.g. ``['has_nan']``). Each
+        truthy occurrence is counted and shown live + in the summary -- a running
+        "how many cells blew up" without the driver knowing what the flag means.
+    abort_after_errors : int, optional
+        If the FIRST ``abort_after_errors`` completed tasks are ALL errors,
+        terminate the pool and raise ``RuntimeError`` -- a systemic-failure guard
+        (wrong import, bad setup) so a long scan does not burn the whole run on a
+        bug. Off by default.
+    pin_threads : bool
+        If True, pin BLAS/OMP thread env to 1 before the pool starts so spawned
+        workers import numpy single-threaded (avoids N workers x multithreaded
+        BLAS oversubscription). Uses ``setdefault`` -- an explicit caller setting
+        wins. Relies on the spawn/forkserver start method (workers re-import
+        numpy); effectively a no-op under fork.
+
+    Returns
+    -------
+    list of dict
+        The ``item`` dicts in task/input order (index-aligned): raw results +
+        error sentinels. Callers that persist via ``on_result`` can ignore this.
+    """
+    tasks = list(tasks)
+    _validate_parallel_inputs(worker, tasks)
+
+    if processes is None:
+        processes = max(1, (os.cpu_count() or 2) - 1)
+    if pin_threads:
+        for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            os.environ.setdefault(_v, "1")
+
+    n = len(tasks)
+    tally_flags = list(tally_flags or [])
+    packed = [(i, worker, args) for i, args in enumerate(tasks)]
+
+    records = [None] * n                       # index-aligned -> stable input order
+    flag_counts = {k: 0 for k in tally_flags}
+    n_err = 0
+    width = len(str(n))
+    start = tm.time()
+
+    print(f"--- run_parallel_tasks: {n} tasks, {processes} workers ({label}) ---",
+          flush=True)
+
+    with Pool(processes=processes) as p:
+        for done, (index, ok, payload) in enumerate(
+                p.imap_unordered(_apply, packed), start=1):
+            if ok:
+                item = {"index": index, "ok": True, "result": payload}
+                if isinstance(payload, dict):
+                    for k in tally_flags:
+                        if payload.get(k):
+                            flag_counts[k] += 1
+            else:
+                item = {"index": index, "ok": False, "error": payload}
+                n_err += 1
+                print(f"  [err] {label} task {index}: {payload}", flush=True)
+
+            records[index] = item
+
+            if on_result is not None:
+                on_result(item, done, n)
+
+            if progress:
+                el = tm.time() - start
+                eta = el / done * (n - done)
+                extra = "".join(f" {k}={flag_counts[k]}" for k in tally_flags)
+                print(f"  {done:>{width}}/{n} {label} | err={n_err}{extra} "
+                      f"| {el / 60:.1f}m ETA {eta / 60:.1f}m", flush=True)
+
+            if (abort_after_errors is not None and done == abort_after_errors
+                    and n_err == done):
+                p.terminate()
+                raise RuntimeError(
+                    f"run_parallel_tasks aborted: first {done} tasks all failed "
+                    f"(systemic error, not a bad cell). Last error: "
+                    f"{item.get('error')}. Fix the cause and re-run, or pass "
+                    f"abort_after_errors=None to disable this guard."
+                )
+
+    el = tm.time() - start
+    n_ok = n - n_err
+    summary = "".join(f", {k}={flag_counts[k]}" for k in tally_flags)
+    print(f"--- {label} done: {n_ok}/{n} ok, {n_err} errored{summary} "
+          f"| {el / 60:.1f}m ---", flush=True)
+    return records

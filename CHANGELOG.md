@@ -148,6 +148,18 @@
   stability classification metadata (`stability`,
   `max_eigenvalue`, `n_positive_eigenvalues`, `n_complex_pairs`) to
   each cell's output.
+- `run_parallel_tasks` — model-agnostic streaming task pool, the sibling
+  of `run_xso_parscan` for heterogeneous, self-contained tasks (each
+  builds its own `xso.setup`) rather than one model swept via
+  `update_vars` — for scans whose cells differ by whole arrays (e.g.
+  per-era forcings) and so share no base setup. Dispatches an importable
+  worker over `imap_unordered` so results stream back as they finish:
+  live plain-print progress + ETA, a parent-side `on_result` hook for
+  incremental save (single writer), per-task try/except → error sentinels
+  (one failure never aborts the pool), `tally_flags` for a live blow-up
+  count, opt-in `abort_after_errors` systemic-failure guard, and
+  `pin_threads` BLAS pinning. Returns the raw per-task items
+  (index-aligned); combination / scoring is left to the caller.
 - `avg_tail` postprocess hook — reduces every time-dimensioned
   variable to its mean over the last N steps, for steady-state
   extraction prior to the stability scan.
