@@ -547,7 +547,8 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values,
                          param_name2, param_values2, processes,
                          model_name, model_setup_name,
                          initial_values_ds, iv_mapping, fixed_overrides,
-                         postprocess_name=None, postprocess_kwargs=None):
+                         postprocess_name=None, postprocess_kwargs=None,
+                         maxtasksperchild=None):
     """Manages the core execution and progress reporting for a 2D scan (solve_ivp)."""
 
     outer_tasks = _generate_iterable_tasks_2d(
@@ -568,6 +569,7 @@ def _run_2d_parscan_core(model_file_name, param_name, param_values,
     try:
         with Pool(
                 processes=processes,
+                maxtasksperchild=maxtasksperchild,
                 initializer=_worker_initializer,
                 initargs=(model_file_name, model_name, model_setup_name,
                           postprocess_name, postprocess_kwargs,)
@@ -600,7 +602,8 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
                     model_name='model', model_setup_name='model_setup',
                     initial_values_ds=None, iv_mapping=None,
                     fixed_overrides=None, linked_overrides=None,
-                    postprocess_name=None, postprocess_kwargs=None):
+                    postprocess_name=None, postprocess_kwargs=None,
+                    maxtasksperchild=None):
     """
     Executes a 1D or 2D parallel parameter scan (using solve_ivp).
 
@@ -687,6 +690,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
         try:
             with Pool(
                     processes=processes,
+                    maxtasksperchild=maxtasksperchild,
                     initializer=_worker_initializer,
                     initargs=(model_file_name, model_name, model_setup_name,
                               postprocess_name, postprocess_kwargs,)
@@ -715,6 +719,7 @@ def run_xso_parscan(model_file_name, param_name, param_values, processes=20,
             fixed_overrides,
             postprocess_name=postprocess_name,
             postprocess_kwargs=postprocess_kwargs,
+            maxtasksperchild=maxtasksperchild,
         )
 
         if nested_data is None:
