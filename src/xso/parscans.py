@@ -1189,7 +1189,8 @@ def _validate_parallel_inputs(worker, tasks):
 
 def run_parallel_tasks(worker, tasks, processes=None, on_result=None,
                        progress=True, label="scan", tally_flags=None,
-                       abort_after_errors=None, pin_threads=True):
+                       abort_after_errors=None, pin_threads=True,
+                       maxtasksperchild=None):
     """Run an iterable of independent tasks across a process pool, streaming.
 
     The model-agnostic sibling of ``run_xso_parscan`` for heterogeneous,
@@ -1237,6 +1238,15 @@ def run_parallel_tasks(worker, tasks, processes=None, on_result=None,
         BLAS oversubscription). Uses ``setdefault`` -- an explicit caller setting
         wins. Relies on the spawn/forkserver start method (workers re-import
         numpy); effectively a no-op under fork.
+    maxtasksperchild : int or None
+        Forwarded to ``multiprocessing.Pool``. If set, each worker process is
+        torn down and replaced after this many tasks, so the OS reclaims its
+        entire address space -- caps per-worker RSS regardless of the leak's
+        nature (allocator retention, scipy ``solve_ivp`` per-solve growth,
+        etc.). Use a small value when per-cell retention is large; each respawn
+        re-pays the worker's import + any module-level model construction, so
+        balance the cap against that cost. ``None`` (default) keeps workers for
+        the whole run (no recycling).
 
     Returns
     -------
@@ -1267,7 +1277,7 @@ def run_parallel_tasks(worker, tasks, processes=None, on_result=None,
     print(f"--- run_parallel_tasks: {n} tasks, {processes} workers ({label}) ---",
           flush=True)
 
-    with Pool(processes=processes) as p:
+    with Pool(processes=processes, maxtasksperchild=maxtasksperchild) as p:
         for done, (index, ok, payload) in enumerate(
                 p.imap_unordered(_apply, packed), start=1):
             if ok:
